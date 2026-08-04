@@ -16,7 +16,7 @@ from newspulse.sources.registry import SourceConfig
 BASE = "https://site.example"
 
 NEWS_SITEMAP = """<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://site.example/self/beauty/foo-1</loc></url>
+  <url><loc><![CDATA[ https://site.example/self/beauty/foo-1 ]]></loc></url>
   <url><loc>https://site.example/news/politics-2</loc></url>
 </urlset>"""
 

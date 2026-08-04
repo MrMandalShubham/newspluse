@@ -66,7 +66,8 @@ class SitemapDiscovery(Discovery):
 
     @staticmethod
     def _locs(root: ET.Element) -> list[str]:
-        return [url.findtext(f"{SM}loc") or "" for url in root.findall(f"{SM}url")]
+        # Strip: some sitemaps wrap <loc> in CDATA with surrounding whitespace.
+        return [(url.findtext(f"{SM}loc") or "").strip() for url in root.findall(f"{SM}url")]
 
     @staticmethod
     def _child_date(loc: str) -> date | None:

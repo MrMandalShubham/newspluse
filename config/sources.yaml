@@ -25,3 +25,30 @@ sources:
       index_sitemap: /webcontent-sitemap.xml
     extraction:
       method: jsonld
+
+  - key: thenodmag
+    name: The Nod Mag
+    url: https://thenodmag.com
+    region: IN
+    type: news
+    trust_score: 0.5
+    # Articles live at /content/<slug>; the beauty section page lists them.
+    discovery:
+      method: htmlcrawl
+      list_pages: ["/beauty-and-wellbeing"]
+      link_pattern: "/content/"
+    extraction:
+      method: jsonld
+
+  - key: harpersbazaar
+    name: Harper's Bazaar India
+    url: https://www.harpersbazaar.in
+    region: IN
+    type: news
+    trust_score: 0.6
+    section_filter: "/beauty/"
+    discovery:
+      method: sitemap
+      news_sitemap: /news-sitemap.xml
+    extraction:
+      method: jsonld
