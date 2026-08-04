@@ -45,8 +45,8 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 
 | Part | What | Confirmation Gate | Status |
 |---|---|---|---|
-| 3.1 | Momentum scoring (volume, velocity, breadth, sentiment) | synthetic dataset → exact expected ranking | ⬜ |
-| 3.2 | Time windows (7/30-day) + `trends` persistence | recompute is stable & reproducible | ⬜ |
+| 3.1 | Momentum scoring (volume, velocity, breadth, sentiment) | synthetic dataset → exact expected ranking | ✅ (exact scores+ranking asserted) |
+| 3.2 | Time windows (7/30-day) + `trends` persistence | recompute is stable & reproducible | ✅ (compute_all writes 7d+30d snapshots, audited) |
 
 ## Phase 4 — Insight Synthesis
 *Goal: the sellable Trend Cards.*

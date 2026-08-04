@@ -73,6 +73,9 @@ def enrich_pending(
             if usage:
                 tokens += int(usage.get("total_tokens") or 0)
 
+            # Stamp signals with the article's publish date so trend windows
+            # reflect when news happened, not when we enriched it.
+            observed_at = item.published_at or datetime.now(UTC)
             for m in result.mentions:
                 entity = resolver.resolve(m.name, m.type)
                 session.add(
@@ -82,6 +85,7 @@ def enrich_pending(
                         signal_type=m.signal_type,
                         sentiment=m.sentiment,
                         weight=1.0,
+                        observed_at=observed_at,
                     )
                 )
                 signals_created += 1
