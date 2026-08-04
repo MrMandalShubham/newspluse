@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from newspulse.collectors.base import CollectedItem, content_hash
 from newspulse.db import SessionLocal
 from newspulse.models import JobRun, RawItem, Source
-from newspulse.storage import get_storage
+from newspulse.storage import ObjectStorage, get_storage
 
 
 def get_or_create_source(
@@ -34,10 +34,13 @@ def ingest_items(
     source_url: str,
     source_type: str = "news",
     region: str | None = None,
+    session: Session | None = None,
+    storage: ObjectStorage | None = None,
 ) -> dict[str, int]:
     """Persist items; return counts. Safe to re-run (dedup by content hash)."""
-    storage = get_storage()
-    session = SessionLocal()
+    own_session = session is None
+    session = session or SessionLocal()
+    storage = storage or get_storage()
     job = JobRun(job_name="ingest", status="started")
     session.add(job)
     session.flush()
@@ -89,4 +92,5 @@ def ingest_items(
         session.commit()
         raise
     finally:
-        session.close()
+        if own_session:
+            session.close()

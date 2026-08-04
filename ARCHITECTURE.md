@@ -55,9 +55,17 @@ The unit of value is a **Trend Card**:
                           └───────────────────────────────────────────────┘
 ```
 
+## Collection framework (config-driven)
+
+Adding a source is **config, not code**. `config/sources.yaml` (the registry) declares each
+source; a `GenericCollector` composes a **discovery** strategy (`sitemap | rss | htmlcrawl`)
+and an **extraction** strategy (`jsonld | readability`) on top of `BaseCollector`
+(rate-limit / retry / robots / provenance). A **fleet runner** collects every source with
+per-source error isolation (one broken site never stops the rest). Ready for 100+ sources.
+
 ## Pipeline stages
 
-1. **Collectors** — pull from sources (RSS/API first, scrapers later). Enforce rate limits,
+1. **Collectors** — config-driven per source (see above). Enforce rate limits,
    retries, robots checks; write provenance. Dedup via `content_hash`.
 2. **Enrichment (Mistral)** — extract entities + signal type + sentiment from raw text →
    `signals`; normalize aliases into `entities`.

@@ -1,0 +1,27 @@
+# NewsPulse source registry — adding a source is CONFIG, not code.
+#
+# Per source:
+#   key            stable identifier (slug)
+#   name           display name (unique; used to link raw_items -> sources)
+#   url            site base URL
+#   region         ISO-ish region hint (optional)
+#   type           news | retail | reg
+#   trust_score    0..1, weights this source in trend scoring
+#   section_filter substring/regex kept from discovered URLs (e.g. beauty section)
+#   discovery.method   sitemap | rss | htmlcrawl
+#   extraction.method  jsonld | readability   (runs on the fetched article HTML)
+
+sources:
+  - key: theestablished
+    name: The Established
+    url: https://www.theestablished.com
+    region: IN
+    type: news
+    trust_score: 0.5
+    section_filter: "/self/beauty/"
+    discovery:
+      method: sitemap
+      news_sitemap: /news-sitemap.xml
+      index_sitemap: /webcontent-sitemap.xml
+    extraction:
+      method: jsonld

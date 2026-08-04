@@ -64,14 +64,26 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 | 5.1 | FastAPI: `/trends`, `/trends/{id}`, `/cards`, `/report/latest` | contract tests pass | ✅ (5 contract tests; live in container: real JSON from Postgres) |
 | 5.2 | Weekly report generator (MD file) | report file with top-10 cards + citations | ✅ (render+write tested; live: 30d-latest.md, 5.5KB, cards+citations) |
 
-## Phase 6 — Scale & Production on DO
-*Goal: it runs itself on DigitalOcean.*
+## Phase 6 — Generalize Collection (Scale to many sources)
+*Goal: adding a source is config, not code — ready for 100+ sites.*
 
 | Part | What | Confirmation Gate | Status |
 |---|---|---|---|
-| 6.1 | Add retail + regulatory sources | multi-source trends corroborate | ⬜ |
-| 6.2 | Scheduler runs full pipeline on cron | unattended run produces a report | ⬜ |
-| 6.3 | Deploy to DO + backups + monitoring | runs on DO 7 days, health green, weekly insight delivered | ⬜ |
+| 6.1 | Source registry: `config/sources.yaml` + Pydantic config + loader + sync to `sources` | load/validate sample registry; idempotent DB sync | ✅ (5 tests; live sync to Postgres, idempotent) |
+| 6.2 | Discovery strategies: sitemap / rss / htmlcrawl + section filter | each tested offline (MockTransport) | ✅ (4 tests: all 3 strategies + backfill window) |
+| 6.3 | Extraction strategies: jsonld / readability (trafilatura) | each tested offline on sample HTML | ✅ (5 tests: jsonld + readability, boilerplate stripped) |
+| 6.4 | GenericCollector + fleet runner (per-source error isolation); migrate The Established to config | live fleet run; failing source isolated; The Established ingests identically | ✅ (fleet live via config: dedup-regression; isolation tested; old collector removed) |
+
+*Deferred to Phase 7: concurrency across sources + scheduler.*
+
+## Phase 7 — Production on DigitalOcean
+*Goal: it runs itself, concurrently, in the cloud.*
+
+| Part | What | Confirmation Gate | Status |
+|---|---|---|---|
+| 7.1 | Bounded concurrency + enrichment cost/rate controls | parallel fleet run within budget cap | ⬜ |
+| 7.2 | Scheduler runs full pipeline on cron | unattended run produces a report | ⬜ |
+| 7.3 | Deploy to DO (Droplet + Managed PG + Spaces) + backups + monitoring | runs on DO 7 days, health green, weekly insight delivered | ⬜ |
 
 ---
 
