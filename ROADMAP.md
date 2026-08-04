@@ -53,8 +53,8 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 
 | Part | What | Confirmation Gate | Status |
 |---|---|---|---|
-| 4.1 | Mistral Trend Card generation (why + so-what) | output matches JSON schema | ⬜ |
-| 4.2 | Citation integrity | every claim cites a real signal/source — no orphans | ⬜ |
+| 4.1 | Mistral Trend Card generation (why + so-what) | output matches JSON schema | ✅ (live: 5 cards, coherent why+so-what, JSON-validated w/ fallback) |
+| 4.2 | Citation integrity | every claim cites a real signal/source — no orphans | ✅ (citations built by construction from backing articles; test asserts no orphans) |
 
 ## Phase 5 — Delivery (backend only)
 *Goal: insights get out.*

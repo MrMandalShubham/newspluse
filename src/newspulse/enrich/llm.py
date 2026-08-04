@@ -10,16 +10,15 @@ never breaks a run.
 """
 
 import json
-import time
 from abc import ABC, abstractmethod
 
 import httpx
 from pydantic import BaseModel, Field
 
 from newspulse.config import settings
+from newspulse.mistral import chat_json
 
 MAX_BODY_CHARS = 8000  # cost guard: cap article text sent to the model
-RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 ENTITY_TYPES = {"brand", "product", "ingredient", "category"}
 SIGNAL_TYPES = {"launch", "mention", "review", "ranking", "price", "reg"}
@@ -66,10 +65,6 @@ class FakeExtractor(SignalExtractor):
 
 
 class MistralExtractor(SignalExtractor):
-    api_url = "https://api.mistral.ai/v1/chat/completions"
-    max_retries = 3
-    backoff_base = 0.5
-
     def __init__(
         self,
         api_key: str | None = None,
@@ -83,45 +78,9 @@ class MistralExtractor(SignalExtractor):
 
     def extract(self, title: str | None, body: str, keywords: list[str]) -> ExtractionResult:
         user = self._build_user_content(title, body, keywords)
-        resp = self._post(
-            {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user},
-                ],
-                "response_format": {"type": "json_object"},
-                "temperature": 0,
-            }
-        )
-        data = resp.json()
-        self.last_usage = data.get("usage")
-        return self.parse(data["choices"][0]["message"]["content"])
-
-    def _post(self, payload: dict) -> httpx.Response:
-        """POST with retry/backoff on transient failures."""
-        last_exc: Exception | None = None
-        for attempt in range(self.max_retries):
-            try:
-                resp = self._client.post(
-                    self.api_url,
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    json=payload,
-                )
-                if resp.status_code in RETRYABLE_STATUS:
-                    raise httpx.HTTPStatusError(
-                        f"retryable status {resp.status_code}",
-                        request=resp.request,
-                        response=resp,
-                    )
-                resp.raise_for_status()
-                return resp
-            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-                last_exc = exc
-                if attempt < self.max_retries - 1:
-                    time.sleep(self.backoff_base * (2**attempt))
-        assert last_exc is not None
-        raise last_exc
+        content, usage = chat_json(self._client, self.api_key, self.model, SYSTEM_PROMPT, user)
+        self.last_usage = usage
+        return self.parse(content)
 
     @staticmethod
     def _build_user_content(title: str | None, body: str, keywords: list[str]) -> str:
