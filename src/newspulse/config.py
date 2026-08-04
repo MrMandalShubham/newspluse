@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # --- Collector politeness ---
     user_agent: str = "NewsPulseBot/0.1 (+https://www.asiacosmepulse.com)"
 
+    # --- Mistral AI (enrichment + synthesis, from Phase 2) ---
+    mistral_api_key: str = ""
+    mistral_model: str = "mistral-small-latest"
+
 
 def get_settings() -> Settings:
     """Return application settings.

@@ -31,7 +31,7 @@ The unit of value is a **Trend Card**:
   EXTERNAL                │                                                 │
   ┌──────────┐  collect   │  ┌────────────┐   ┌────────────┐  ┌──────────┐ │
   │ RSS /    │──────────► │  │ COLLECTORS │──►│  ENRICH     │─►│  TREND    │ │
-  │ News     │            │  │ (workers)  │   │ (Claude:    │  │  ENGINE   │ │
+  │ News     │            │  │ (workers)  │   │ (Mistral:    │  │  ENGINE   │ │
   │ Retail   │            │  │ provenance │   │  entities + │  │ (scoring, │ │
   │ Reg feeds│            │  │ + dedup    │   │  signals)   │  │  ranking) │ │
   └──────────┘            │  └─────┬──────┘   └─────┬──────┘  └────┬─────┘ │
@@ -46,7 +46,7 @@ The unit of value is a **Trend Card**:
                           │        ▼                                        │
                           │  ┌────────────┐      ┌──────────────┐           │
                           │  │ SYNTHESIS  │─────►│ DELIVERY      │           │
-                          │  │ (Claude:   │      │ API (FastAPI) │──► JSON   │
+                          │  │ (Mistral:   │      │ API (FastAPI) │──► JSON   │
                           │  │ TrendCards)│      │ + report gen  │──► PDF/MD │
                           │  └────────────┘      └──────────────┘           │
                           │                                                 │
@@ -59,11 +59,11 @@ The unit of value is a **Trend Card**:
 
 1. **Collectors** — pull from sources (RSS/API first, scrapers later). Enforce rate limits,
    retries, robots checks; write provenance. Dedup via `content_hash`.
-2. **Enrichment (Claude)** — extract entities + signal type + sentiment from raw text →
+2. **Enrichment (Mistral)** — extract entities + signal type + sentiment from raw text →
    `signals`; normalize aliases into `entities`.
 3. **Trend engine (deterministic, no AI)** — roll signals into `trends`; score momentum;
    rank. Deterministic = reproducible = defensible to buyers.
-4. **Synthesis (Claude)** — generate Trend Cards (why + so-what) for top trends, with
+4. **Synthesis (Mistral)** — generate Trend Cards (why + so-what) for top trends, with
    mandatory source citations.
 5. **Delivery** — FastAPI endpoints + weekly report file generation.
 
@@ -92,7 +92,7 @@ The unit of value is a **Trend Card**:
 | Raw store | S3-compatible | **DO Spaces** |
 | Scheduling | APScheduler (in-process) | container |
 | Scraping | httpx + selectolax; Playwright for JS-heavy sites | container |
-| AI | Anthropic SDK (Claude) | external API |
+| AI | Mistral AI (`mistralai` SDK) | external API |
 | Packaging | Docker + docker-compose | **DO Droplet** + **DO Container Registry** |
 | Config | Pydantic Settings + `.env` | DO env vars / secrets |
 | Tests | pytest + coverage | CI + pre-deploy |

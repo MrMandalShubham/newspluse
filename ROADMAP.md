@@ -36,8 +36,8 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 
 | Part | What | Confirmation Gate | Status |
 |---|---|---|---|
-| 2.1 | Entity dictionary + alias normalization | aliases resolve to one entity | ⬜ |
-| 2.2 | Claude extraction: entities + signal type + sentiment | golden-file test: known articles → expected signals | ⬜ |
+| 2.1 | Entity dictionary + alias normalization | aliases resolve to one entity | ✅ (4 tests: alias→canonical, case-insensitive get-or-create) |
+| 2.2 | Mistral extraction: entities + signal type + sentiment | golden-file test: known articles → expected signals | ✅ (offline tests green; live: 2 articles → 41 signals, 41 entities across brand/product/ingredient/category) |
 | 2.3 | Cost/robustness guards (batching, retry, token caps) | survives malformed input; cost logged | ⬜ |
 
 ## Phase 3 — Trend Engine (deterministic)
@@ -53,7 +53,7 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 
 | Part | What | Confirmation Gate | Status |
 |---|---|---|---|
-| 4.1 | Claude Trend Card generation (why + so-what) | output matches JSON schema | ⬜ |
+| 4.1 | Mistral Trend Card generation (why + so-what) | output matches JSON schema | ⬜ |
 | 4.2 | Citation integrity | every claim cites a real signal/source — no orphans | ⬜ |
 
 ## Phase 5 — Delivery (backend only)
