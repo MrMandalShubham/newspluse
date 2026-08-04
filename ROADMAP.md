@@ -61,8 +61,8 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 
 | Part | What | Confirmation Gate | Status |
 |---|---|---|---|
-| 5.1 | FastAPI: `/trends`, `/trends/{id}`, `/report/latest` | contract tests pass | ⬜ |
-| 5.2 | Weekly report generator (MD/PDF file) | report file with top-10 cards + citations | ⬜ |
+| 5.1 | FastAPI: `/trends`, `/trends/{id}`, `/cards`, `/report/latest` | contract tests pass | ✅ (5 contract tests; live in container: real JSON from Postgres) |
+| 5.2 | Weekly report generator (MD file) | report file with top-10 cards + citations | ✅ (render+write tested; live: 30d-latest.md, 5.5KB, cards+citations) |
 
 ## Phase 6 — Scale & Production on DO
 *Goal: it runs itself on DigitalOcean.*

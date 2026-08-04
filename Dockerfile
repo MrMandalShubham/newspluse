@@ -10,7 +10,8 @@ WORKDIR /app
 # Install dependencies first (better layer caching).
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install --upgrade pip && pip install .
+# Editable install so the ./src volume mount + --reload reflect code changes.
+RUN pip install --upgrade pip && pip install -e .
 
 # Tests are copied so the image can run the gate in CI/DO if needed.
 COPY tests ./tests

@@ -8,10 +8,12 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from newspulse import __version__
+from newspulse.api import router
 from newspulse.config import settings
 from newspulse.db import engine
 
 app = FastAPI(title=settings.app_name, version=__version__)
+app.include_router(router)
 
 
 @app.get("/")
