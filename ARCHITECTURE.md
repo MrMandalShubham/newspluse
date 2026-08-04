@@ -79,6 +79,7 @@ The unit of value is a **Trend Card**:
 | Raw content | Stored in **DO Spaces**, keyed by hash. | Keeps Postgres lean; provenance intact. |
 | Legal posture | Store raw internally; expose only snippets + links + our analysis. | Sell insight, not wholesale content. |
 | Config | `niche.yaml` drives niche + market + sources. | Swap niche without a rewrite. |
+| Collection modes | Per source: one-time **backfill** (date-windowed history) + ongoing **news** (daily fresh). | Trend detection needs a history baseline *and* fresh signal. |
 
 ## Tech stack → DigitalOcean
 

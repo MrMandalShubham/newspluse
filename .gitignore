@@ -15,6 +15,9 @@ venv/
 # Local databases / throwaway gate files
 *.db
 
+# Locally stored raw article content (goes to DO Spaces in production)
+/data/
+
 # Tooling caches
 .pytest_cache/
 .ruff_cache/

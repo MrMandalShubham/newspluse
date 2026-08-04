@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     # --- Storage (used from Phase 0.2 onward) ---
     database_url: str = "postgresql+psycopg://newspulse:newspulse@db:5432/newspulse"
 
+    # --- Object storage: raw article text (local dev; DO Spaces in production) ---
+    storage_dir: str = "./data/raw"
+
+    # --- Collector politeness ---
+    user_agent: str = "NewsPulseBot/0.1 (+https://www.asiacosmepulse.com)"
+
 
 def get_settings() -> Settings:
     """Return application settings.

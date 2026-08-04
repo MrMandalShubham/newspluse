@@ -27,9 +27,9 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 
 | Part | What | Confirmation Gate | Status |
 |---|---|---|---|
-| 1.1 | `base` collector (rate-limit, retry, robots, provenance) | unit tests pass | ⬜ |
-| 1.2 | One RSS news source end-to-end → `raw_items` + Spaces | run collector → N items stored with full provenance | ⬜ |
-| 1.3 | Dedup via `content_hash` | re-run collector → zero new rows (idempotency) | ⬜ |
+| 1.1 | `base` collector (rate-limit, retry, robots, provenance) | unit tests pass | ✅ (9 tests green, offline via MockTransport) |
+| 1.2 | The Established collector (news + backfill modes) → `raw_items` + storage | run collector → beauty articles stored with full provenance | ✅ (live: 2 articles → Postgres, bodies+keywords in storage) |
+| 1.3 | Dedup via `content_hash` | re-run collector → zero new rows (idempotency) | ✅ (re-run: inserted=0, skipped=2) |
 
 ## Phase 2 — Enrichment (AI extraction)
 *Goal: raw text → structured signals + normalized entities.*
