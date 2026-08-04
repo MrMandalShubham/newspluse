@@ -45,6 +45,11 @@ class SourceConfig(BaseModel):
     type: str = "news"
     trust_score: float = 0.5
     section_filter: str | None = None
+    # httpx (static HTML) or playwright (render JS first). Orthogonal to
+    # discovery/extraction — a JS site reuses the same strategies on rendered HTML.
+    render: Literal["httpx", "playwright"] = "httpx"
+    # Cap articles processed per run (protects cost/time, esp. for rendered sites).
+    max_articles: int | None = None
     discovery: DiscoveryConfig
     extraction: ExtractionConfig
 

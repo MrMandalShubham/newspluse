@@ -52,3 +52,34 @@ sources:
       news_sitemap: /news-sitemap.xml
     extraction:
       method: jsonld
+
+  # --- JS-rendered (SPA) sources: render with a headless browser first ---
+  - key: vogue
+    name: Vogue India
+    url: https://www.vogue.in
+    region: IN
+    type: news
+    trust_score: 0.6
+    render: playwright
+    max_articles: 8
+    discovery:
+      method: htmlcrawl
+      list_pages: ["/beauty"]
+      link_pattern: "/beauty/content/"
+    extraction:
+      method: jsonld
+
+  - key: beautyjournal
+    name: Beauty Journal
+    url: https://www.beautyjournal.id
+    region: ID
+    type: news
+    trust_score: 0.5
+    render: playwright
+    max_articles: 8
+    discovery:
+      method: htmlcrawl
+      list_pages: ["/"]
+      link_pattern: "/article/"
+    extraction:
+      method: readability

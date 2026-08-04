@@ -73,6 +73,7 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 | 6.2 | Discovery strategies: sitemap / rss / htmlcrawl + section filter | each tested offline (MockTransport) | ✅ (4 tests: all 3 strategies + backfill window) |
 | 6.3 | Extraction strategies: jsonld / readability (trafilatura) | each tested offline on sample HTML | ✅ (5 tests: jsonld + readability, boilerplate stripped) |
 | 6.4 | GenericCollector + fleet runner (per-source error isolation); migrate The Established to config | live fleet run; failing source isolated; The Established ingests identically | ✅ (fleet live via config: dedup-regression; isolation tested; old collector removed) |
+| 6.5 | Playwright render layer (`render: playwright`) for JS/SPA sources + `max_articles` cap | render dispatch tested; JS site ingests live | ✅ (3 tests; live: Beauty Journal SPA + Vogue rendered & ingested; per-source isolation proven) |
 
 *Deferred to Phase 7: concurrency across sources + scheduler.*
 
