@@ -10,6 +10,7 @@ never breaks a run.
 """
 
 import json
+import re
 from abc import ABC, abstractmethod
 
 import httpx
@@ -24,14 +25,53 @@ ENTITY_TYPES = {"brand", "product", "ingredient", "category"}
 SIGNAL_TYPES = {"launch", "mention", "review", "ranking", "price", "reg"}
 
 SYSTEM_PROMPT = (
-    "You are a precise information extractor for beauty-industry news. "
-    "From the article, extract mentions of beauty ENTITIES and classify each. "
+    "You are a precise information extractor for beauty-industry market intelligence. "
+    "Extract only genuine BEAUTY MARKET entities from the article and classify each.\n"
+    "Entity types (choose exactly one):\n"
+    "- brand: a cosmetics/beauty/fragrance brand that makes or sells beauty products "
+    "(e.g., L'Oreal, Forest Essentials, Chanel).\n"
+    "- product: a specific named beauty product (e.g., 'OUAI Detox Shampoo').\n"
+    "- ingredient: a cosmetic ingredient or fragrance note (e.g., niacinamide, salicylic acid).\n"
+    "- category: a product category or format (e.g., body wash, serum, clarifying shampoo).\n"
+    "Do NOT extract (skip entirely): people or individuals (dermatologists, experts, founders, "
+    "authors, e.g., 'Dr Madhuri Agarwal'); retailers, marketplaces or websites (e.g., Amazon, "
+    "Nykaa, Tira); market-research or data firms (e.g., Mintel, Nielsen); pharmaceutical or "
+    "chemical companies that are not beauty brands; generic professions or roles (e.g., "
+    "'dermatologist', 'consumer'); publications or media outlets.\n"
+    "Prefer precision over recall: if unsure whether something is a genuine beauty "
+    "brand/product/ingredient/category, omit it.\n"
     "Return ONLY JSON of the form: "
     '{"mentions":[{"name":str,"type":one of [brand,product,ingredient,category],'
     '"signal_type":one of [launch,mention,review,ranking,price,reg],'
     '"sentiment":number in [-1,1] or null}]}. '
     "Use the provided keywords as hints. Do not invent entities unsupported by the text."
 )
+
+# Deterministic safety net: drop clear non-entities the model may still emit.
+_PERSON_PREFIX = re.compile(r"^(dr|dr\.|prof|mr|mrs|ms|miss)\b", re.IGNORECASE)
+_DOMAIN = re.compile(r"\.(com|in|co|io|net|org)\b", re.IGNORECASE)
+_RETAILER_HINTS = {
+    "amazon", "nykaa", "tira", "tirabeauty", "flipkart", "myntra",
+    "sephora", "ulta", "purplle", "smytten",
+}
+_RESEARCH_FIRMS = {"mintel", "nielsen", "euromonitor", "statista", "kantar", "gartner"}
+_ROLE_WORDS = {
+    "dermatologist", "dermatologists", "consumer", "consumers", "expert",
+    "experts", "founder", "author", "celebrity", "influencer",
+}
+
+
+def is_noise(name: str) -> bool:
+    """True if ``name`` is a person, retailer, research firm, or generic role."""
+    n = name.strip().lower()
+    if not n:
+        return True
+    if _PERSON_PREFIX.match(n) or _DOMAIN.search(n):
+        return True
+    tokens = set(re.split(r"[\s./]+", n))
+    if tokens & _RETAILER_HINTS or tokens & _RESEARCH_FIRMS:
+        return True
+    return n in _ROLE_WORDS
 
 
 class Mention(BaseModel):
@@ -111,6 +151,11 @@ class MistralExtractor(SignalExtractor):
                 )
             except (KeyError, TypeError, ValueError):
                 continue
-            if m.name and m.type in ENTITY_TYPES and m.signal_type in SIGNAL_TYPES:
+            if (
+                m.name
+                and m.type in ENTITY_TYPES
+                and m.signal_type in SIGNAL_TYPES
+                and not is_noise(m.name)
+            ):
                 mentions.append(m)
         return ExtractionResult(mentions=mentions)

@@ -11,6 +11,7 @@ from newspulse.enrich.llm import (
     Mention,
     MistralExtractor,
     SignalExtractor,
+    is_noise,
 )
 from newspulse.models import Entity, RawItem, Signal, Source
 from newspulse.pipeline.enrich import enrich_pending
@@ -62,6 +63,30 @@ def test_parse_drops_malformed_and_out_of_vocab() -> None:
     assert MistralExtractor.parse("not json").mentions == []
     bad_type = '{"mentions":[{"name":"X","type":"planet","signal_type":"mention"}]}'
     assert MistralExtractor.parse(bad_type).mentions == []
+
+
+def test_is_noise_filters_people_retailers_firms_roles() -> None:
+    assert is_noise("Dr Madhuri Agarwal")
+    assert is_noise("Tirabeauty.com")
+    assert is_noise("Amazon.in")
+    assert is_noise("Nykaa")
+    assert is_noise("Mintel")
+    assert is_noise("dermatologist")
+    # genuine beauty entities are kept
+    assert not is_noise("niacinamide")
+    assert not is_noise("Forest Essentials")
+    assert not is_noise("L'Occitane")
+
+
+def test_parse_drops_noise_entities() -> None:
+    payload = (
+        '{"mentions":['
+        '{"name":"Dr Madhuri Agarwal","type":"brand","signal_type":"mention"},'
+        '{"name":"Nykaa","type":"brand","signal_type":"mention"},'
+        '{"name":"Niacinamide","type":"ingredient","signal_type":"mention"}]}'
+    )
+    r = MistralExtractor.parse(payload)
+    assert [m.name for m in r.mentions] == ["Niacinamide"]
 
 
 # --- pipeline -----------------------------------------------------------
