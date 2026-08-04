@@ -15,8 +15,13 @@ from newspulse.models import Entity
 
 
 def normalize_name(name: str) -> str:
-    """Lowercase, trim, and collapse internal whitespace."""
-    return " ".join(name.strip().lower().split())
+    """Lowercase, trim, treat hyphens/underscores as spaces, collapse whitespace.
+
+    Folding hyphens keeps variants like "hyaluronic-acid" and "hyaluronic acid"
+    (or "botulinum-toxin" -> seed alias "botulinum toxin") on one entity.
+    """
+    cleaned = name.strip().lower().replace("-", " ").replace("_", " ")
+    return " ".join(cleaned.split())
 
 
 # canonical display name -> (entity type, alias surface forms)

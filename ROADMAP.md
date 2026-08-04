@@ -38,7 +38,7 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 |---|---|---|---|
 | 2.1 | Entity dictionary + alias normalization | aliases resolve to one entity | ✅ (4 tests: alias→canonical, case-insensitive get-or-create) |
 | 2.2 | Mistral extraction: entities + signal type + sentiment | golden-file test: known articles → expected signals | ✅ (offline tests green; live: 2 articles → 41 signals, 41 entities across brand/product/ingredient/category) |
-| 2.3 | Cost/robustness guards (batching, retry, token caps) | survives malformed input; cost logged | ⬜ |
+| 2.3 | Cost/robustness guards (retry, token caps, normalization) | survives malformed input; cost logged | ✅ (hyphen-merge, LLM retry/backoff, per-run token+error logging; live 41→37 entities, tokens logged) |
 
 ## Phase 3 — Trend Engine (deterministic)
 *Goal: signals → ranked "what's trending."*

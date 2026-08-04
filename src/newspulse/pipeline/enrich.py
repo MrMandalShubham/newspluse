@@ -51,7 +51,7 @@ def enrich_pending(
     if limit is not None:
         items = items[:limit]
 
-    processed = signals_created = 0
+    processed = signals_created = errors = tokens = 0
     try:
         for item in items:
             try:
@@ -59,11 +59,20 @@ def enrich_pending(
             except Exception:  # noqa: BLE001 - missing/broken payload, skip item
                 continue
 
-            result = extractor.extract(
-                payload.get("title"),
-                payload.get("body") or "",
-                payload.get("keywords") or [],
-            )
+            try:
+                result = extractor.extract(
+                    payload.get("title"),
+                    payload.get("body") or "",
+                    payload.get("keywords") or [],
+                )
+            except Exception:  # noqa: BLE001 - LLM call failed after retries; skip item
+                errors += 1
+                continue
+
+            usage = getattr(extractor, "last_usage", None)
+            if usage:
+                tokens += int(usage.get("total_tokens") or 0)
+
             for m in result.mentions:
                 entity = resolver.resolve(m.name, m.type)
                 session.add(
@@ -78,11 +87,17 @@ def enrich_pending(
                 signals_created += 1
             processed += 1
 
+        stats = {
+            "processed": processed,
+            "signals": signals_created,
+            "errors": errors,
+            "tokens": tokens,
+        }
         job.status = "success"
         job.finished_at = datetime.now(UTC)
-        job.stats = {"processed": processed, "signals": signals_created}
+        job.stats = stats
         session.commit()
-        return {"processed": processed, "signals": signals_created}
+        return stats
     except Exception as exc:
         session.rollback()
         failed = JobRun(

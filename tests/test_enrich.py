@@ -1,8 +1,17 @@
 """Part 2.2 — extraction parsing + enrichment pipeline (offline, fake extractor)."""
 
 import json
+import time
 
-from newspulse.enrich.llm import ExtractionResult, FakeExtractor, Mention, MistralExtractor
+import httpx
+
+from newspulse.enrich.llm import (
+    ExtractionResult,
+    FakeExtractor,
+    Mention,
+    MistralExtractor,
+    SignalExtractor,
+)
 from newspulse.models import Entity, RawItem, Signal, Source
 from newspulse.pipeline.enrich import enrich_pending
 
@@ -68,7 +77,7 @@ def test_enrich_creates_signals_and_dedups_entities(db_session) -> None:
         )
     )
     stats = enrich_pending(fake, session=db_session, storage=storage)
-    assert stats == {"processed": 1, "signals": 2}
+    assert stats["processed"] == 1 and stats["signals"] == 2 and stats["errors"] == 0
     assert db_session.query(Signal).count() == 2
     assert db_session.query(Entity).count() == 1  # both surface forms -> one entity
 
@@ -85,3 +94,45 @@ def test_enrich_is_idempotent(db_session) -> None:
     stats = enrich_pending(fake, session=db_session, storage=storage)  # already enriched
     assert stats["processed"] == 0
     assert db_session.query(Signal).count() == 1
+
+
+# --- robustness (Part 2.3) ---------------------------------------------
+def test_extractor_retries_then_succeeds_and_reports_usage(monkeypatch) -> None:
+    monkeypatch.setattr(time, "sleep", lambda *_: None)
+    seq = [503, 200]
+    calls = {"i": 0}
+    body = (
+        '{"mentions":[{"name":"Niacinamide","type":"ingredient",'
+        '"signal_type":"mention","sentiment":0.2}]}'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = seq[calls["i"]]
+        calls["i"] += 1
+        if status == 200:
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": body}}], "usage": {"total_tokens": 123}},
+            )
+        return httpx.Response(503, json={"error": "busy"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ex = MistralExtractor(api_key="x", model="m", client=client)
+    result = ex.extract("t", "b", [])
+    assert len(result.mentions) == 1
+    assert ex.last_usage["total_tokens"] == 123
+    assert calls["i"] == 2  # one retry, then success
+
+
+class _RaisingExtractor(SignalExtractor):
+    def extract(self, title, body, keywords) -> ExtractionResult:
+        raise RuntimeError("boom")
+
+
+def test_enrich_counts_extractor_errors(db_session) -> None:
+    storage = DictStorage()
+    _seed_item(db_session, storage)
+    stats = enrich_pending(_RaisingExtractor(), session=db_session, storage=storage)
+    assert stats["errors"] == 1
+    assert stats["processed"] == 0
+    assert db_session.query(Signal).count() == 0

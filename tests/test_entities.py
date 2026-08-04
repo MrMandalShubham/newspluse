@@ -6,6 +6,18 @@ from newspulse.models import Entity
 
 def test_normalize_name() -> None:
     assert normalize_name("  Vitamin  B3 ") == "vitamin b3"
+    assert normalize_name("Hyaluronic-Acid") == "hyaluronic acid"
+
+
+def test_hyphenated_forms_merge(db_session) -> None:
+    r = EntityResolver(db_session)
+    a = r.resolve("hyaluronic-acid", "ingredient")
+    b = r.resolve("Hyaluronic Acid", "ingredient")
+    assert a.id == b.id
+    # 'botulinum-toxin' -> normalizes to seed alias 'botulinum toxin' -> canonical 'botox'
+    c = r.resolve("botulinum-toxin")
+    assert c.canonical_name == "botox"
+    assert db_session.query(Entity).count() == 2  # hyaluronic acid + botox
 
 
 def test_aliases_resolve_to_one_canonical(db_session) -> None:
