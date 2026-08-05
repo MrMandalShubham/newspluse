@@ -86,6 +86,16 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 | 7.2 | Scheduler runs full pipeline on cron | unattended run produces a report | ⬜ |
 | 7.3 | Deploy to DO (Droplet + Managed PG + Spaces) + backups + monitoring | runs on DO 7 days, health green, weekly insight delivered | ⬜ |
 
+## Phase 8 — Product-Article Reports (current priority)
+*Goal: per-article beauty-product summaries; merge same-product/same-topic articles into combined reports. (Trend engine untouched.)*
+
+| Part | What | Confirmation Gate | Status |
+|---|---|---|---|
+| 8.1 | Data model: `article_reports` + `report_clusters` (+ migration) | migration apply/rollback; models registered | ✅ (SQLite + Postgres verified) |
+| 8.2 | Classify + summarize (Mistral: relevance + summary + products); idempotent | offline (fake + parse) + live on a few articles | ✅ (3 tests; live: 27 summarized, 13 product-related / 14 filtered) |
+| 8.3 | Embeddings (Mistral) + cosine clustering of same product/topic | synthetic vectors cluster deterministically; live | ✅ (4 tests; live: 13→10 clusters, cross-source & cross-language grouping) |
+| 8.4 | Merge clusters (Mistral) + product report (Markdown) + API | report with merged stories + citations; live | ✅ (4 tests; live: 2 merged stories + 8 singletons; /product-report + /product-clusters served) |
+
 ---
 
 ## Working agreement

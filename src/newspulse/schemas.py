@@ -34,3 +34,18 @@ class TrendCardOut(BaseModel):
 
 class TrendDetailOut(TrendOut):
     cards: list[TrendCardOut]
+
+
+class ClusterMemberOut(BaseModel):
+    title: str | None
+    url: str
+    source: str
+
+
+class ProductClusterOut(BaseModel):
+    id: int
+    label: str
+    summary: str
+    size: int
+    products: list[str]
+    members: list[ClusterMemberOut]

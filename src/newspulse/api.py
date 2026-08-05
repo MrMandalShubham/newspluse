@@ -6,9 +6,16 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from newspulse.db import get_session
-from newspulse.models import Entity, Trend, TrendCard
+from newspulse.models import ArticleReport, Entity, RawItem, ReportCluster, Source, Trend, TrendCard
 from newspulse.pipeline.report import render_report
-from newspulse.schemas import TrendCardOut, TrendDetailOut, TrendOut
+from newspulse.reports.render import render_product_report
+from newspulse.schemas import (
+    ClusterMemberOut,
+    ProductClusterOut,
+    TrendCardOut,
+    TrendDetailOut,
+    TrendOut,
+)
 
 router = APIRouter()
 
@@ -96,3 +103,39 @@ def latest_report(
     if not markdown:
         raise HTTPException(status_code=404, detail="no trends for window")
     return markdown
+
+
+@router.get("/product-report", response_class=PlainTextResponse)
+def product_report(session: Session = Depends(get_session)) -> str:
+    return render_product_report(session)
+
+
+@router.get("/product-clusters", response_model=list[ProductClusterOut])
+def product_clusters(session: Session = Depends(get_session)) -> list[ProductClusterOut]:
+    clusters = session.execute(
+        select(ReportCluster).order_by(ReportCluster.size.desc(), ReportCluster.id)
+    ).scalars().all()
+    result: list[ProductClusterOut] = []
+    for cluster in clusters:
+        rows = session.execute(
+            select(ArticleReport, RawItem, Source)
+            .join(RawItem, RawItem.id == ArticleReport.raw_item_id)
+            .join(Source, Source.id == RawItem.source_id)
+            .where(ArticleReport.cluster_id == cluster.id)
+            .order_by(ArticleReport.id)
+        ).all()
+        products = sorted({p for (ar, _, _) in rows for p in (ar.products or [])})
+        result.append(
+            ProductClusterOut(
+                id=cluster.id,
+                label=cluster.label,
+                summary=cluster.summary,
+                size=cluster.size,
+                products=products,
+                members=[
+                    ClusterMemberOut(title=ri.title, url=ri.url, source=src.name)
+                    for (_ar, ri, src) in rows
+                ],
+            )
+        )
+    return result

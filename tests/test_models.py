@@ -10,6 +10,8 @@ EXPECTED_TABLES = {
     "signals",
     "trends",
     "trend_cards",
+    "article_reports",
+    "report_clusters",
     "job_runs",
 }
 

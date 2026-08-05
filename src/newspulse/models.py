@@ -15,6 +15,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -140,6 +141,48 @@ class TrendCard(Base):
     )
 
     trend: Mapped["Trend"] = relationship(back_populates="cards")
+
+
+class ReportCluster(Base):
+    """A merged group of articles about the same product or type of news."""
+
+    __tablename__ = "report_clusters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    label: Mapped[str] = mapped_column(String(500))
+    summary: Mapped[str] = mapped_column(Text)
+    size: Mapped[int] = mapped_column(Integer, default=1)
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ArticleReport(Base):
+    """Per-article product summary (relevance-filtered), with embedding + cluster.
+
+    ``embedding`` is stored as JSON (list[float]) for now — small volumes, keeps
+    tests running on SQLite. pgvector is the upgrade path when data grows.
+    """
+
+    __tablename__ = "article_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    raw_item_id: Mapped[int] = mapped_column(
+        ForeignKey("raw_items.id"), unique=True, index=True
+    )
+    is_product_related: Mapped[bool] = mapped_column(Boolean, default=False)
+    title: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    products: Mapped[list | None] = mapped_column(JSON, default=list)
+    embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    cluster_id: Mapped[int | None] = mapped_column(
+        ForeignKey("report_clusters.id"), nullable=True, index=True
+    )
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class JobRun(Base):
