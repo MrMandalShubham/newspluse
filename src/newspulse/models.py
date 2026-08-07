@@ -174,6 +174,12 @@ class ArticleReport(Base):
     is_product_related: Mapped[bool] = mapped_column(Boolean, default=False)
     title: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    sentiment: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    theme: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    brands: Mapped[list | None] = mapped_column(JSON, default=list)
+    companies: Mapped[list | None] = mapped_column(JSON, default=list)
+    ingredients: Mapped[list | None] = mapped_column(JSON, default=list)
     products: Mapped[list | None] = mapped_column(JSON, default=list)
     embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
     cluster_id: Mapped[int | None] = mapped_column(

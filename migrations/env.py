@@ -10,6 +10,7 @@ from sqlalchemy import engine_from_config, pool
 from newspulse import models  # noqa: F401  (import registers all tables on Base.metadata)
 from newspulse.config import settings
 from newspulse.db import Base
+from newspulse.publish import models as publish_models  # noqa: F401  (register demo tables)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

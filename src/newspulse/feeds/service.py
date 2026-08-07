@@ -105,6 +105,12 @@ def ingest_article(
         is_product_related=result.is_product_related,
         title=result.label or title,
         summary=result.summary or None,
+        category=result.category or None,
+        sentiment=result.sentiment or None,
+        theme=result.theme or None,
+        brands=result.brands,
+        companies=result.companies,
+        ingredients=result.ingredients,
         products=result.products,
         model=settings.mistral_model,
     )

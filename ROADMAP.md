@@ -106,6 +106,18 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 | 9.3 | NewsAPI adapter + poller runner (`python -m newspulse.feeds.run`) | offline mapping (mock); live needs NEWSAPI_KEY | ✅ (offline; live pending key) |
 | 9.4 | Auto-rebuild after N new product articles (`maybe_rebuild`) | rebuilds at threshold, not below | ✅ (covered in 9.1 tests + wired into poller) |
 
+## Phase 10 — Publish to demo dashboard schema (DigitalOcean)
+*Goal: final results land in DO in the demo's exact table names/columns so the existing News Pulse dashboard reads them.*
+
+| Part | What | Confirmation Gate | Status |
+|---|---|---|---|
+| 10.1 | Summarizer emits category/sentiment/theme + typed lists (brands/companies/ingredients/products); store on `article_reports` (+migration) | migration apply/rollback; parse tests | ✅ (migration verified; tests) |
+| 10.2 | Demo-schema models + migration: `news_pulse_articles`, 4 junctions, `markets`/`brands`/`companies`/`ingredients`/`products_master` (uuid PKs) | 10 tables migrate/rollback | ✅ (SQLite verified; Postgres pending Docker) |
+| 10.3 | Publisher: map product articles → demo tables (get-or-create lookups, upsert by url, junctions; derived source_tier/market/signal_tier/topic_velocity) | offline: mapping + junctions + idempotent | ✅ (2 tests) |
+| 10.4 | Live publish to DO + verify demo tables populated | dashboard-shaped rows in Postgres | ⬜ (pending Docker/DO) |
+
+*Assumed defaults (say to change): create demo tables fresh in our DO DB; AI-derive category/sentiment/theme; signal_tier/topic_velocity from cluster size; companies extracted; reach null.*
+
 ---
 
 ## Working agreement

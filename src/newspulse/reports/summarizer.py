@@ -16,23 +16,38 @@ from newspulse.mistral import chat_json
 
 MAX_BODY_CHARS = 8000
 
+CATEGORIES = {"brand", "market", "regulatory", "ingredient", "retail", "consumer"}
+SENTIMENTS = {"positive", "neutral", "negative"}
+
 SYSTEM_PROMPT = (
     "You are a beauty-industry news analyst. Decide whether the article is about "
-    "beauty PRODUCTS — specific products, brands, or ingredients/categories discussed "
-    "in a product context (launches, reviews, guides, comparisons, product trends). "
-    'Return ONLY JSON: {"is_product_related": true/false, '
+    "beauty PRODUCTS (specific products, brands, or ingredients/categories in a product "
+    "context) and extract structured fields. Return ONLY JSON: "
+    '{"is_product_related": true/false, '
+    '"category": one of ["brand","market","regulatory","ingredient","retail","consumer"], '
+    '"sentiment": one of ["positive","neutral","negative"], '
+    '"theme": a short topic tag (e.g. "barrier repair", "clean fragrance"), '
     '"label": a short descriptive title, '
-    '"summary": a 2-4 sentence summary focused on the product news, '
-    '"products": [named products, brands, or key ingredients]}. '
-    "If it is NOT about beauty products (e.g. pure wellbeing, celebrity, general "
-    "lifestyle), set is_product_related=false and keep the summary brief."
+    '"summary": a 2-4 sentence summary of the product news, '
+    '"brands": [beauty brand names], '
+    '"companies": [parent companies or manufacturers], '
+    '"ingredients": [key ingredients], '
+    '"products": [specific named products]}. '
+    "If it is NOT about beauty products (pure wellbeing, celebrity, general lifestyle), "
+    "set is_product_related=false and keep the other fields brief or empty."
 )
 
 
 class ArticleSummary(BaseModel):
     is_product_related: bool = False
+    category: str = ""
+    sentiment: str = "neutral"
+    theme: str = ""
     label: str = ""
     summary: str = ""
+    brands: list[str] = Field(default_factory=list)
+    companies: list[str] = Field(default_factory=list)
+    ingredients: list[str] = Field(default_factory=list)
     products: list[str] = Field(default_factory=list)
 
 
@@ -75,6 +90,12 @@ class MistralSummarizer(Summarizer):
         return self.parse(content)
 
     @staticmethod
+    def _as_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(v).strip() for v in value if str(v).strip()]
+
+    @staticmethod
     def parse(content: str) -> ArticleSummary:
         try:
             obj = json.loads(content)
@@ -82,11 +103,17 @@ class MistralSummarizer(Summarizer):
             return ArticleSummary()
         if not isinstance(obj, dict):
             return ArticleSummary()
-        products = obj.get("products")
-        products = products if isinstance(products, list) else []
+        category = str(obj.get("category") or "").strip().lower()
+        sentiment = str(obj.get("sentiment") or "").strip().lower()
         return ArticleSummary(
             is_product_related=bool(obj.get("is_product_related", False)),
+            category=category if category in CATEGORIES else "",
+            sentiment=sentiment if sentiment in SENTIMENTS else "neutral",
+            theme=str(obj.get("theme") or "").strip(),
             label=str(obj.get("label") or "").strip(),
             summary=str(obj.get("summary") or "").strip(),
-            products=[str(p).strip() for p in products if str(p).strip()],
+            brands=MistralSummarizer._as_list(obj.get("brands")),
+            companies=MistralSummarizer._as_list(obj.get("companies")),
+            ingredients=MistralSummarizer._as_list(obj.get("ingredients")),
+            products=MistralSummarizer._as_list(obj.get("products")),
         )

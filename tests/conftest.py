@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import newspulse.models  # noqa: F401  (registers tables on Base.metadata)
+import newspulse.publish.models  # noqa: F401  (registers demo tables on Base.metadata)
 from newspulse.db import Base
 
 

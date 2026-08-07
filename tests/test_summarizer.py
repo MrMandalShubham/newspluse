@@ -36,14 +36,22 @@ def _seed_item(session, storage, *, hash_="h1", title="A body wash guide") -> Ra
 
 def test_parse_valid_and_malformed() -> None:
     good = (
-        '{"is_product_related": true, "label": "Best body washes", '
-        '"summary": "A guide.", "products": ["CeraVe", "salicylic acid"]}'
+        '{"is_product_related": true, "category": "retail", "sentiment": "positive", '
+        '"theme": "barrier repair", "label": "Best body washes", "summary": "A guide.", '
+        '"brands": ["CeraVe"], "companies": ["L\'Oreal"], '
+        '"ingredients": ["salicylic acid"], "products": ["CeraVe SA Wash"]}'
     )
     r = MistralSummarizer.parse(good)
     assert r.is_product_related is True
-    assert r.label == "Best body washes"
-    assert r.products == ["CeraVe", "salicylic acid"]
-    # malformed -> safe default (not relevant)
+    assert r.category == "retail"
+    assert r.sentiment == "positive"
+    assert r.theme == "barrier repair"
+    assert r.brands == ["CeraVe"]
+    assert r.ingredients == ["salicylic acid"]
+    assert r.products == ["CeraVe SA Wash"]
+    # invalid category/sentiment normalize; malformed -> safe default
+    bad = MistralSummarizer.parse('{"is_product_related": true, "category": "x", "sentiment": "y"}')
+    assert bad.category == "" and bad.sentiment == "neutral"
     assert MistralSummarizer.parse("not json").is_product_related is False
 
 
