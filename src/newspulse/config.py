@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # --- Storage (used from Phase 0.2 onward) ---
     database_url: str = "postgresql+psycopg://newspulse:newspulse@db:5432/newspulse"
 
+    # --- Publish target: the platform/demo DB (News Pulse tables); working DB = database_url ---
+    publish_database_url: str = ""
+
     # --- Object storage: raw article text (local dev; DO Spaces in production) ---
     storage_dir: str = "./data/raw"
 

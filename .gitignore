@@ -3,6 +3,12 @@
 *.env
 !.env.example
 
+# TLS certs / keys (e.g. DO Managed Postgres CA)
+certs/
+*.crt
+*.pem
+*.key
+
 # Python
 __pycache__/
 *.py[cod]
