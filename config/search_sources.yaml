@@ -1,0 +1,16 @@
+# Search-based sources (SerpAPI Google Search). For general-news domains that
+# have no beauty section, we search them for beauty terms and ingest the hits.
+# Needs SERPAPI_KEY. Mirrors the provided source list (domain + gl/hl/tbs).
+#
+# Defaults per source: query = beauty terms, gl=kr, hl=en, tbs=qdr:m,sbd:1 (last
+# month, by date).
+
+sources:
+  - domain: chosun.com/english
+    region: KR
+  - domain: koreajoongangdaily.joins.com
+    region: KR
+  - domain: mk.co.kr/en
+    region: KR
+  - domain: koreaherald.com
+    region: KR

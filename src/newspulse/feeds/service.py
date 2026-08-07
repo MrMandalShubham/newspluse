@@ -87,7 +87,7 @@ def ingest_article(
 
     source_name = payload.get("source_name") or "NewsAPI"
     root = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-    source = get_or_create_source(session, source_name, root, "news", None)
+    source = get_or_create_source(session, source_name, root, "news", payload.get("region"))
 
     stored = json.dumps(
         {"url": url, "title": title, "body": text, "source": source_name}, ensure_ascii=False
