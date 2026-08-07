@@ -49,3 +49,14 @@ class ProductClusterOut(BaseModel):
     size: int
     products: list[str]
     members: list[ClusterMemberOut]
+
+
+class IngestIn(BaseModel):
+    """Payload accepted by the /ingest webhook (aggregator-agnostic)."""
+
+    url: str
+    title: str | None = None
+    content: str | None = None
+    description: str | None = None
+    source_name: str | None = None
+    published_at: str | None = None

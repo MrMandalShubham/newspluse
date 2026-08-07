@@ -1,21 +1,27 @@
 """Read-only delivery API — exposes trends, cards, and the report."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from newspulse.config import settings
 from newspulse.db import get_session
+from newspulse.feeds.service import ArticleFetcher, ingest_article
 from newspulse.models import ArticleReport, Entity, RawItem, ReportCluster, Source, Trend, TrendCard
 from newspulse.pipeline.report import render_report
+from newspulse.reports.embedder import Embedder, MistralEmbedder
 from newspulse.reports.render import render_product_report
+from newspulse.reports.summarizer import MistralSummarizer, Summarizer
 from newspulse.schemas import (
     ClusterMemberOut,
+    IngestIn,
     ProductClusterOut,
     TrendCardOut,
     TrendDetailOut,
     TrendOut,
 )
+from newspulse.storage import get_storage
 
 router = APIRouter()
 
@@ -139,3 +145,32 @@ def product_clusters(session: Session = Depends(get_session)) -> list[ProductClu
             )
         )
     return result
+
+
+def get_summarizer() -> Summarizer:
+    return MistralSummarizer()
+
+
+def get_embedder() -> Embedder:
+    return MistralEmbedder()
+
+
+@router.post("/ingest")
+def ingest_webhook(
+    item: IngestIn,
+    x_webhook_secret: str | None = Header(default=None),
+    session: Session = Depends(get_session),
+    summarizer: Summarizer = Depends(get_summarizer),
+    embedder: Embedder = Depends(get_embedder),
+) -> dict:
+    """Event-driven ingestion: relevance-gate one article, store if product news."""
+    if settings.webhook_secret and x_webhook_secret != settings.webhook_secret:
+        raise HTTPException(status_code=401, detail="invalid webhook secret")
+    return ingest_article(
+        item.model_dump(),
+        session=session,
+        storage=get_storage(),
+        summarizer=summarizer,
+        embedder=embedder,
+        fetcher=ArticleFetcher(),
+    )

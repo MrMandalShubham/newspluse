@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     mistral_api_key: str = ""
     mistral_model: str = "mistral-small-latest"
 
+    # --- Webhook / NewsAPI ingestion (Phase 9) ---
+    newsapi_key: str = ""
+    newsapi_query: str = '(beauty OR skincare OR makeup OR cosmetics OR fragrance OR "hair care")'
+    webhook_secret: str = ""
+    rebuild_after_n: int = 5
+
 
 def get_settings() -> Settings:
     """Return application settings.

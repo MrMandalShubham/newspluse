@@ -43,7 +43,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI idiom: Depends()/Query() are meant to be called in argument defaults.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

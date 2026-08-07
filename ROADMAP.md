@@ -96,6 +96,16 @@ Status legend: ⬜ not started · 🔨 in progress · ✅ done
 | 8.3 | Embeddings (Mistral) + cosine clustering of same product/topic | synthetic vectors cluster deterministically; live | ✅ (4 tests; live: 13→10 clusters, cross-source & cross-language grouping) |
 | 8.4 | Merge clusters (Mistral) + product report (Markdown) + API | report with merged stories + citations; live | ✅ (4 tests; live: 2 merged stories + 8 singletons; /product-report + /product-clusters served) |
 
+## Phase 9 — Webhook / event-driven ingestion (NewsAPI)
+*Goal: ingest on new-article events (not daily batch); relevance-gate each; auto-rebuild the product report after N new product articles.*
+
+| Part | What | Confirmation Gate | Status |
+|---|---|---|---|
+| 9.1 | `ingest_article()` service: dedup → content (provided or fetch+readability) → relevance+summarize → store if product (+embed) | offline: product / not-product / duplicate / fetch | ✅ (5 tests) |
+| 9.2 | Secured `POST /ingest` webhook → ingest_article | contract: bad secret 401; good ingests | ✅ (2 tests) |
+| 9.3 | NewsAPI adapter + poller runner (`python -m newspulse.feeds.run`) | offline mapping (mock); live needs NEWSAPI_KEY | ✅ (offline; live pending key) |
+| 9.4 | Auto-rebuild after N new product articles (`maybe_rebuild`) | rebuilds at threshold, not below | ✅ (covered in 9.1 tests + wired into poller) |
+
 ---
 
 ## Working agreement
