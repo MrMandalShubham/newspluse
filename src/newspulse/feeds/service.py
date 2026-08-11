@@ -24,6 +24,7 @@ from newspulse.reports.merger import ClusterMerger
 from newspulse.reports.pipeline import build_clusters, merge_clusters
 from newspulse.reports.render import write_product_report
 from newspulse.reports.summarizer import Summarizer
+from newspulse.sources.extraction import extract_image
 from newspulse.storage import ObjectStorage
 
 
@@ -45,21 +46,31 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
 
 
-def _content_for(payload: dict, fetcher: ArticleFetcher | None) -> tuple[str, str | None]:
-    """Return (text, title). Prefer full body: provided content, else fetch + readability."""
+def _content_for(
+    payload: dict, fetcher: ArticleFetcher | None
+) -> tuple[str, str | None, str | None]:
+    """Return (text, title, image_url). Prefer full body: provided content, else fetch."""
     title = payload.get("title")
+    image = payload.get("image_url")
     text = (payload.get("content") or "").strip()
     if not text and fetcher is not None and payload.get("url"):
         try:
-            doc = trafilatura.bare_extraction(fetcher.fetch(payload["url"]), with_metadata=True)
-        except Exception:  # noqa: BLE001 - unreachable/JS/paywalled: fall back to description
-            doc = None
-        if doc and (doc.text or "").strip():
-            text = doc.text.strip()
-            title = title or getattr(doc, "title", None)
+            html = fetcher.fetch(payload["url"])
+        except Exception:  # noqa: BLE001 - unreachable/JS/paywalled
+            html = None
+        if html:
+            image = image or extract_image(html)
+            try:
+                doc = trafilatura.bare_extraction(html, with_metadata=True)
+            except Exception:  # noqa: BLE001
+                doc = None
+            if doc and (doc.text or "").strip():
+                text = doc.text.strip()
+                title = title or getattr(doc, "title", None)
+                image = image or getattr(doc, "image", None)
     if not text:
         text = (payload.get("description") or "").strip()
-    return text, title
+    return text, title, image
 
 
 def ingest_article(
@@ -79,7 +90,7 @@ def ingest_article(
     if session.execute(select(RawItem.id).where(RawItem.content_hash == digest)).first():
         return {"status": "duplicate"}
 
-    text, title = _content_for(payload, fetcher)
+    text, title, image = _content_for(payload, fetcher)
     if not text:
         return {"status": "no_content"}
 
@@ -90,12 +101,13 @@ def ingest_article(
     source = get_or_create_source(session, source_name, root, "news", payload.get("region"))
 
     stored = json.dumps(
-        {"url": url, "title": title, "body": text, "source": source_name}, ensure_ascii=False
+        {"url": url, "title": title, "body": text, "source": source_name, "image_url": image},
+        ensure_ascii=False,
     ).encode("utf-8")
     raw_ref = storage.put(f"{digest}.json", stored)
     raw = RawItem(
         source_id=source.id, url=url, title=title, content_hash=digest,
-        raw_ref=raw_ref, published_at=_parse_dt(payload.get("published_at")),
+        raw_ref=raw_ref, image_url=image, published_at=_parse_dt(payload.get("published_at")),
     )
     session.add(raw)
     session.flush()

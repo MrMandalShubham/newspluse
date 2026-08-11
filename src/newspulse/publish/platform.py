@@ -138,6 +138,7 @@ def _upsert_article(conn, d, market_id):
         "headline": d["headline"], "summary": d["summary"], "source": d["source"],
         "source_tier": d["source_tier"], "market_id": market_id, "category": d["category"],
         "sentiment": d["sentiment"], "theme": d["theme"], "reach": None,
+        "image_url": d.get("image_url"),
         "published_at": d["published_at"], "signal_tier": d["signal_tier"],
         "topic_velocity": d["topic_velocity"],
     }
@@ -150,7 +151,7 @@ def _upsert_article(conn, d, market_id):
             text("update news_pulse_articles set headline=:headline, summary=:summary, "
                  "source=:source, source_tier=:source_tier, market_id=:market_id, "
                  "category=:category, sentiment=:sentiment, theme=:theme, reach=:reach, "
-                 "published_at=:published_at, signal_tier=:signal_tier, "
+                 "image_url=:image_url, published_at=:published_at, signal_tier=:signal_tier, "
                  "topic_velocity=:topic_velocity where id=:id"),
             {**fields, "id": aid},
         )
@@ -158,10 +159,10 @@ def _upsert_article(conn, d, market_id):
         aid = uuid.uuid4()
         conn.execute(
             text("insert into news_pulse_articles(id,url,headline,summary,source,source_tier,"
-                 "market_id,category,sentiment,theme,reach,published_at,signal_tier,"
+                 "market_id,category,sentiment,theme,reach,image_url,published_at,signal_tier,"
                  "topic_velocity,created_at) values(:id,:url,:headline,:summary,:source,"
-                 ":source_tier,:market_id,:category,:sentiment,:theme,:reach,:published_at,"
-                 ":signal_tier,:topic_velocity, now())"),
+                 ":source_tier,:market_id,:category,:sentiment,:theme,:reach,:image_url,"
+                 ":published_at,:signal_tier,:topic_velocity, now())"),
             {**fields, "id": aid, "url": d["url"]},
         )
     for tbl in _JUNCTIONS:
@@ -194,6 +195,7 @@ def _collect_rows() -> list[dict]:
                 size = cluster.size if cluster else 1
             out.append({
                 "url": ri.url, "headline": ar.title or ri.title or ri.url,
+                "image_url": ri.image_url,
                 "summary": ar.summary, "source": src.name,
                 "source_tier": _source_tier(src.trust_score), "region": src.region,
                 "category": ar.category, "sentiment": ar.sentiment, "theme": ar.theme,
@@ -209,6 +211,11 @@ def _collect_rows() -> list[dict]:
 def publish_to_platform() -> dict:
     plat = create_engine(settings.publish_database_url)
     Base.metadata.create_all(plat, tables=NEW_TABLES, checkfirst=True)
+    # Additive column on our own table (safe, idempotent) for the article image.
+    with plat.begin() as conn:
+        conn.execute(
+            text("ALTER TABLE news_pulse_articles ADD COLUMN IF NOT EXISTS image_url TEXT")
+        )
     data = _collect_rows()
     stats = {"articles": 0, "brands_matched": 0, "brands_new": 0,
              "products_matched": 0, "products_new": 0, "markets_new": 0}

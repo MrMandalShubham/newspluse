@@ -15,6 +15,7 @@ from newspulse.feeds.service import ingest_article, maybe_rebuild
 from newspulse.reports.embedder import MistralEmbedder
 from newspulse.reports.merger import MistralMerger
 from newspulse.reports.summarizer import MistralSummarizer
+from newspulse.sources.extraction import extract_image
 from newspulse.storage import get_storage
 
 # Biased toward Korean brands that are in the OliveYoung / K-beauty catalog.
@@ -44,6 +45,7 @@ def run_googlenews(query: str = DEFAULT_QUERY, region: str = "KR", limit: int = 
                 "url": final_url,
                 "title": item["title"],
                 "content": body,
+                "image_url": extract_image(html),
                 "source_name": item["source_name"],
                 "published_at": item["published_at"].isoformat() if item["published_at"] else None,
                 "region": region,

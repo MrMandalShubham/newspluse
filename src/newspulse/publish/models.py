@@ -92,6 +92,7 @@ class NewsPulseArticle(Base):
     reach: Mapped[int | None] = mapped_column(Integer, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     url: Mapped[str] = mapped_column(Text, unique=True)
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     signal_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
     topic_velocity: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

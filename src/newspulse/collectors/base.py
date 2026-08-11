@@ -34,6 +34,7 @@ class CollectedItem(BaseModel):
     body: str | None = None
     published_at: datetime | None = None
     lang: str | None = None
+    image_url: str | None = None
     keywords: list[str] = Field(default_factory=list)
 
 

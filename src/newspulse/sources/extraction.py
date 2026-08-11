@@ -23,6 +23,40 @@ from newspulse.sources.registry import SourceConfig
 _LD_RE = re.compile(r'<script type="application/ld\+json">(.*?)</script>', re.S)
 _ARTICLE_TYPES = {"Article", "NewsArticle", "BlogPosting"}
 
+_OG_IMAGE_RE = re.compile(
+    r'<meta[^>]+(?:property|name)=["\'](?:og:image(?::url)?|twitter:image)["\']'
+    r'[^>]*content=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+_OG_IMAGE_RE_REV = re.compile(
+    r'<meta[^>]+content=["\']([^"\']+)["\']'
+    r'[^>]*(?:property|name)=["\'](?:og:image(?::url)?|twitter:image)["\']',
+    re.IGNORECASE,
+)
+
+
+def extract_image(html: str) -> str | None:
+    """Best-effort main image: og:image / twitter:image meta tag (entities decoded)."""
+    for pattern in (_OG_IMAGE_RE, _OG_IMAGE_RE_REV):
+        match = pattern.search(html)
+        if match:
+            return html_lib.unescape(match.group(1).strip())
+    return None
+
+
+def _jsonld_image(data: dict) -> str | None:
+    img = data.get("image")
+    if isinstance(img, str):
+        return img
+    if isinstance(img, dict):
+        return img.get("url")
+    if isinstance(img, list) and img:
+        first = img[0]
+        return first if isinstance(first, str) else (
+            first.get("url") if isinstance(first, dict) else None
+        )
+    return None
+
 
 class Extractor(ABC):
     def __init__(self, config: SourceConfig) -> None:
@@ -49,6 +83,7 @@ class JsonLdExtractor(Extractor):
             body=body,
             published_at=self._parse_dt(data.get("datePublished")),
             lang="en",
+            image_url=_jsonld_image(data) or extract_image(html),
             keywords=self._as_keywords(data.get("keywords")),
         )
 
@@ -113,6 +148,7 @@ class ReadabilityExtractor(Extractor):
             body=body,
             published_at=self._parse_date(getattr(doc, "date", None)),
             lang=getattr(doc, "language", None) or None,
+            image_url=extract_image(html) or getattr(doc, "image", None),
             keywords=keywords,
         )
 

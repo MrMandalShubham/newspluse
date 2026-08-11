@@ -59,6 +59,7 @@ class RawItem(Base):
     title: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     content_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     raw_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)  # Spaces key
+    image_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # og:image / JSON-LD
     lang: Mapped[str | None] = mapped_column(String(10), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     collected_at: Mapped[datetime] = mapped_column(

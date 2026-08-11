@@ -69,6 +69,7 @@ def ingest_items(
                     title=item.title,
                     content_hash=h,
                     raw_ref=raw_ref,
+                    image_url=item.image_url,
                     lang=item.lang,
                     published_at=item.published_at,
                 )
