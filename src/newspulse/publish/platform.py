@@ -10,9 +10,11 @@ Existing tables are never dropped or altered.
 
 import json
 import re
+import time
 import uuid
 
 from sqlalchemy import create_engine, select, text
+from sqlalchemy.exc import OperationalError
 
 from newspulse.config import settings
 from newspulse.db import Base, SessionLocal
@@ -342,6 +344,41 @@ def publish_to_platform() -> dict:
         return stats
     finally:
         plat.dispose()
+
+
+def refresh_platform_signals(batch: int = 100) -> dict:
+    """Fast, resilient refresh of cluster-derived fields on existing articles.
+
+    Updates only signal_tier, topic_velocity and importance_score (recomputed from
+    the current clustering) on news_pulse_articles, matched by url — NO catalog
+    re-matching. Commits in batches with pre-ping + retry, so a transient DO
+    connection drop only retries the current batch instead of losing the whole run.
+    """
+    data = _collect_rows()
+    plat = create_engine(settings.publish_database_url, pool_pre_ping=True)
+    updated = 0
+    try:
+        for i in range(0, len(data), batch):
+            chunk = data[i:i + batch]
+            for attempt in range(4):
+                try:
+                    with plat.begin() as conn:
+                        for d in chunk:
+                            conn.execute(
+                                text("update news_pulse_articles set signal_tier=:st, "
+                                     "topic_velocity=:tv, importance_score=:imp where url=:u"),
+                                {"st": d["signal_tier"], "tv": d["topic_velocity"],
+                                 "imp": d["importance_score"], "u": d["url"]},
+                            )
+                    updated += len(chunk)
+                    break
+                except OperationalError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(2 ** attempt)
+    finally:
+        plat.dispose()
+    return {"updated": updated}
 
 
 def main() -> None:

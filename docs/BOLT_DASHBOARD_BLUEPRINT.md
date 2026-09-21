@@ -86,8 +86,8 @@ Each column, what it holds, and where to use it in the dashboard.
 | `reach` | integer | Reserved (currently null) | Ignore for now |
 | `published_at` | timestamptz | True article date | **Date display + WEEKLY grouping** (the client's weekly-report axis) |
 | `url` | text | Original article link | **"Read original" ↗** (open new tab); make headline + image clickable |
-| `signal_tier` | text | `mainstream, emerging-topic, first-mention` | Optional badge — **see caveat below** |
-| `topic_velocity` | double | Cluster-size proxy | **Do NOT surface** — currently skewed (one large cluster); use `importance_score` instead |
+| `signal_tier` | text | `mainstream` (≥4 sources), `emerging-topic` (2-3), `first-mention` (1) | Coverage badge; secondary filter |
+| `topic_velocity` | double | How many sources carry the story (1-70) | "Covered by N sources"; secondary sort |
 | `created_at` | timestamptz | Ingestion time | Admin/debug only |
 | `image_url` | text | og:image / JSON-LD image (95% coverage) | **Card thumbnail / hero** — fallback when null |
 | `importance_score` | integer | **1-10** impact (hybrid: LLM × corroboration); avg 8.1 | **Primary ranking** — sort, badge, min-filter |
@@ -96,10 +96,12 @@ Each column, what it holds, and where to use it in the dashboard.
 **`event_types` values:** `Acquisition, M&A, Launch, Regulatory, Retail,
 Ingredient, Competitor, Partnership, Expansion, Funding`.
 
-**Caveat — `signal_tier` / `topic_velocity`:** both derive from story
-clustering, which currently over-merges into one large cluster. Treat them as
-experimental. Rank and prioritize by **`importance_score`**. (This can be tuned
-later; the blueprint will be updated if so.)
+**`signal_tier` / `topic_velocity`:** derive from story clustering, now fixed
+(centroid linkage @ 0.92) and refreshed in `defaultdb` — `topic_velocity` = how
+many sources carry the story (1-70), `signal_tier` = the tier from that count.
+Both are usable. `importance_score` remains the recommended **primary** ranking;
+`topic_velocity`/`signal_tier` are good **secondary** signals ("covered by N
+sources").
 
 ---
 
@@ -376,10 +378,10 @@ to **centroid linkage** at a **0.92** near-duplicate threshold: now **716
 clusters, max size 70**, only 4 clusters >20 — genuine "same story" groups. The
 LLM merge input is capped so large clusters can't overflow.
 
-The fix is applied in the engine (working DB). The `signal_tier` /
-`topic_velocity` values in `defaultdb` will refresh on the **next full publish**;
-until then they still show the old skewed numbers, so continue to **rank by
-`importance_score`** (always clean).
+The fix is applied in the engine **and refreshed in `defaultdb`**:
+`topic_velocity` now ranges 1-70 (was up to 1,045), avg 9.1; `signal_tier` splits
+mainstream 343 / emerging-topic 208 / first-mention 597. Both are safe to use.
+`importance_score` stays the recommended primary ranking.
 
 ## 12. Retail Pulse data — [Backend] (corrected counts)
 
