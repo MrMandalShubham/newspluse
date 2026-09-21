@@ -21,7 +21,10 @@ from newspulse.reports.merger import ClusterMerger
 from newspulse.reports.summarizer import Summarizer
 from newspulse.storage import ObjectStorage, get_storage
 
-DEFAULT_THRESHOLD = 0.82
+DEFAULT_THRESHOLD = 0.92
+# Cap how many member summaries are sent to the LLM merge (avoids context overflow
+# on large clusters); the cluster's true size is still recorded from all members.
+MERGE_MAX_MEMBERS = 12
 
 
 def _storage_key(raw_ref: str | None) -> str:
@@ -185,7 +188,9 @@ def build_clusters(
             ).scalars().all()
         )
         by_id = {r.id: r for r in reports}
-        groups = greedy_cluster([(r.id, r.embedding) for r in reports], threshold)
+        groups = greedy_cluster(
+            [(r.id, r.embedding) for r in reports], threshold, linkage="centroid"
+        )
 
         for group in groups:
             members = [by_id[i] for i in group]
@@ -240,13 +245,14 @@ def merge_clusters(merger: ClusterMerger, session: Session | None = None) -> dic
                 cluster.label = members[0].title or cluster.label
                 singletons += 1
                 continue
+            sample = members[:MERGE_MAX_MEMBERS]
             try:
                 story = merger.merge(
-                    [{"title": m.title, "summary": m.summary} for m in members]
+                    [{"title": m.title, "summary": m.summary} for m in sample]
                 )
             except Exception:  # noqa: BLE001 - keep other clusters if one merge fails
                 errors += 1
-                cluster.summary = " ".join(m.summary or "" for m in members)
+                cluster.summary = " ".join(m.summary or "" for m in sample)
                 continue
             usage = getattr(merger, "last_usage", None)
             if usage:

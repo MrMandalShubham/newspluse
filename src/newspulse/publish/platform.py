@@ -83,6 +83,13 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:50] or "x"
 
 
+def article_slug(headline: str | None, article_id: uuid.UUID) -> str:
+    """Stable, permanent SEO slug: {headline}-{id6}. CJK/empty -> article-{id6}."""
+    id6 = article_id.hex[:6]
+    base = re.sub(r"[^a-z0-9]+", "-", (headline or "").lower()).strip("-")[:80]
+    return f"{base}-{id6}" if base else f"article-{id6}"
+
+
 def _source_tier(trust: float | None) -> str:
     if trust is None:
         return "tier-3"
@@ -189,13 +196,13 @@ def _upsert_article(conn, d, market_id):
     else:
         aid = uuid.uuid4()
         conn.execute(
-            text("insert into news_pulse_articles(id,url,headline,summary,source,source_tier,"
-                 "market_id,category,sentiment,theme,reach,image_url,published_at,signal_tier,"
-                 "topic_velocity,importance_score,event_types,created_at) values(:id,:url,"
-                 ":headline,:summary,:source,:source_tier,:market_id,:category,:sentiment,"
-                 ":theme,:reach,:image_url,:published_at,:signal_tier,:topic_velocity,"
+            text("insert into news_pulse_articles(id,slug,url,headline,summary,source,"
+                 "source_tier,market_id,category,sentiment,theme,reach,image_url,published_at,"
+                 "signal_tier,topic_velocity,importance_score,event_types,created_at) values("
+                 ":id,:slug,:url,:headline,:summary,:source,:source_tier,:market_id,:category,"
+                 ":sentiment,:theme,:reach,:image_url,:published_at,:signal_tier,:topic_velocity,"
                  ":importance_score,cast(:event_types as jsonb), now())"),
-            {**fields, "id": aid, "url": d["url"]},
+            {**fields, "id": aid, "url": d["url"], "slug": article_slug(d["headline"], aid)},
         )
     for tbl in _JUNCTIONS:
         conn.execute(text(f"delete from {tbl} where article_id=:a"), {"a": aid})
@@ -243,6 +250,49 @@ def _collect_rows() -> list[dict]:
         work.close()
 
 
+_BRAND_COUNT_VIEW = (
+    "CREATE OR REPLACE VIEW news_pulse_brand_counts AS "
+    "SELECT b.id AS brand_id, b.name, count(nab.article_id) AS article_count "
+    "FROM brands b JOIN news_article_brands nab ON nab.brand_id = b.id "
+    "GROUP BY b.id, b.name"
+)
+
+
+def _finalize(conn) -> dict:
+    """Idempotent post-publish: backfill missing slugs + (re)create brand-count view."""
+    rows = conn.execute(
+        text("select id, headline from news_pulse_articles where slug is null")
+    ).all()
+    for r in rows:
+        conn.execute(
+            text("update news_pulse_articles set slug=:s where id=:id"),
+            {"s": article_slug(r.headline, r.id), "id": r.id},
+        )
+    conn.execute(text(_BRAND_COUNT_VIEW))
+    return {"slugs_backfilled": len(rows)}
+
+
+def finalize_platform() -> dict:
+    """Standalone: ensure slug column/index, backfill slugs, create brand-count view.
+
+    Runs the additive DDL + _finalize without re-publishing every article — used to
+    apply slug/view changes to an already-populated platform DB quickly.
+    """
+    plat = create_engine(settings.publish_database_url)
+    try:
+        with plat.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE news_pulse_articles ADD COLUMN IF NOT EXISTS slug TEXT")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_news_pulse_articles_slug "
+                     "ON news_pulse_articles(slug)")
+            )
+            return _finalize(conn)
+    finally:
+        plat.dispose()
+
+
 def publish_to_platform() -> dict:
     plat = create_engine(settings.publish_database_url)
     Base.metadata.create_all(plat, tables=NEW_TABLES, checkfirst=True)
@@ -258,6 +308,13 @@ def publish_to_platform() -> dict:
         conn.execute(
             text("ALTER TABLE news_pulse_articles "
                  "ADD COLUMN IF NOT EXISTS event_types JSONB")
+        )
+        conn.execute(
+            text("ALTER TABLE news_pulse_articles ADD COLUMN IF NOT EXISTS slug TEXT")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_news_pulse_articles_slug "
+                 "ON news_pulse_articles(slug)")
         )
     data = _collect_rows()
     stats = {"articles": 0, "brands_matched": 0, "brands_new": 0,
@@ -280,6 +337,8 @@ def publish_to_platform() -> dict:
                     _link(conn, "news_article_products", "product_id", aid,
                           _product_id(conn, name, stats))
                 stats["articles"] += 1
+        with plat.begin() as conn:
+            stats.update(_finalize(conn))
         return stats
     finally:
         plat.dispose()

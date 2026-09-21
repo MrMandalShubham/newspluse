@@ -80,6 +80,7 @@ class NewsPulseArticle(Base):
     __tablename__ = "news_pulse_articles"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    slug: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     headline: Mapped[str] = mapped_column(Text)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)

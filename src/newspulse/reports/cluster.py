@@ -18,12 +18,20 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 
 def greedy_cluster(
-    items: list[tuple[int, list[float]]], threshold: float
+    items: list[tuple[int, list[float]]], threshold: float, linkage: str = "single"
 ) -> list[list[int]]:
     """Group items whose vectors are within ``threshold`` cosine similarity.
 
-    ``items`` is (id, vector). Single-linkage: an item joins an existing cluster
-    if it is similar enough to any member; otherwise it starts a new cluster.
+    ``items`` is (id, vector). An item joins an existing cluster if it is similar
+    enough, otherwise it starts a new one. ``linkage`` controls the comparison:
+
+      * ``"single"``   — similar to ANY member (max). Simple, but chains
+                         (A~B, B~C pulls A,B,C together even if A is unlike C),
+                         which collapses large corpora into one mega-cluster.
+      * ``"centroid"`` — similar to the cluster's MEAN vector. Resists chaining,
+                         so it scales to thousands of articles. Also cheaper
+                         (one comparison per cluster, not per member).
+
     Returns clusters as lists of ids, preserving input order.
     """
     clusters: list[dict] = []
@@ -31,13 +39,19 @@ def greedy_cluster(
         best: dict | None = None
         best_sim = threshold
         for cl in clusters:
-            sim = max(cosine(vec, v) for v in cl["vecs"])
+            if linkage == "centroid":
+                n = cl["count"]
+                sim = cosine(vec, [s / n for s in cl["sum"]])
+            else:
+                sim = max(cosine(vec, v) for v in cl["vecs"])
             if sim >= best_sim:
                 best_sim = sim
                 best = cl
         if best is None:
-            clusters.append({"ids": [id_], "vecs": [vec]})
+            clusters.append({"ids": [id_], "vecs": [vec], "sum": list(vec), "count": 1})
         else:
             best["ids"].append(id_)
             best["vecs"].append(vec)
+            best["sum"] = [s + v for s, v in zip(best["sum"], vec, strict=False)]
+            best["count"] += 1
     return [cl["ids"] for cl in clusters]
