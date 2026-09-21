@@ -11,7 +11,7 @@ import trafilatura
 
 from newspulse.db import SessionLocal
 from newspulse.feeds.googlenews import GoogleNewsClient, GoogleNewsResolver
-from newspulse.feeds.service import ingest_article, maybe_rebuild
+from newspulse.feeds.service import ingest_article, ingest_article_raw, maybe_rebuild
 from newspulse.reports.embedder import MistralEmbedder
 from newspulse.reports.merger import MistralMerger
 from newspulse.reports.summarizer import MistralSummarizer
@@ -25,13 +25,15 @@ DEFAULT_QUERY = (
 )
 
 
-def run_googlenews(query: str = DEFAULT_QUERY, region: str = "KR", limit: int = 15) -> dict:
+def run_googlenews(
+    query: str = DEFAULT_QUERY, region: str = "KR", limit: int = 15, raw: bool = False
+) -> dict:
     client = GoogleNewsClient()
     resolver = GoogleNewsResolver()
     session = SessionLocal()
     storage = get_storage()
-    summarizer = MistralSummarizer()
-    embedder = MistralEmbedder()
+    summarizer = None if raw else MistralSummarizer()
+    embedder = None if raw else MistralEmbedder()
     counts: dict[str, int] = {}
     items = client.search(query, limit=limit)
     try:
@@ -50,12 +52,15 @@ def run_googlenews(query: str = DEFAULT_QUERY, region: str = "KR", limit: int = 
                 "published_at": item["published_at"].isoformat() if item["published_at"] else None,
                 "region": region,
             }
-            result = ingest_article(
-                payload, session=session, storage=storage,
-                summarizer=summarizer, embedder=embedder, fetcher=None,
-            )
+            if raw:
+                result = ingest_article_raw(payload, session=session, storage=storage, fetcher=None)
+            else:
+                result = ingest_article(
+                    payload, session=session, storage=storage,
+                    summarizer=summarizer, embedder=embedder, fetcher=None,
+                )
             counts[result["status"]] = counts.get(result["status"], 0) + 1
-        rebuild = maybe_rebuild(session, MistralMerger(), storage=storage)
+        rebuild = None if raw else maybe_rebuild(session, MistralMerger(), storage=storage)
     finally:
         resolver.close()
         client.close()
@@ -68,8 +73,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--query", default=DEFAULT_QUERY)
     parser.add_argument("--region", default="KR")
     parser.add_argument("--limit", type=int, default=15)
+    parser.add_argument("--raw", action="store_true", help="Store raw only (no LLM enrichment).")
     args = parser.parse_args(argv)
-    print(f"[googlenews] {run_googlenews(query=args.query, region=args.region, limit=args.limit)}")
+    print(
+        f"[googlenews] "
+        f"{run_googlenews(query=args.query, region=args.region, limit=args.limit, raw=args.raw)}"
+    )
 
 
 if __name__ == "__main__":

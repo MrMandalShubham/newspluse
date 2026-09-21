@@ -120,6 +120,9 @@ def ingest_article(
         category=result.category or None,
         sentiment=result.sentiment or None,
         theme=result.theme or None,
+        event_types=result.event_types,
+        importance_score=result.importance_score or None,
+        country=result.country or None,
         brands=result.brands,
         companies=result.companies,
         ingredients=result.ingredients,
@@ -135,6 +138,47 @@ def ingest_article(
         "status": "ingested" if result.is_product_related else "skipped_not_product",
         "product": result.is_product_related,
     }
+
+
+def ingest_article_raw(
+    payload: dict,
+    *,
+    session: Session,
+    storage: ObjectStorage,
+    fetcher: ArticleFetcher | None = None,
+) -> dict:
+    """Store one article WITHOUT LLM enrichment (link + image + title + body only).
+
+    Used when no LLM is available: captures the raw material now so it can be
+    enriched later by ``backfill_enrich``. Creates a RawItem but no ArticleReport.
+    """
+    url = payload.get("url")
+    if not url:
+        return {"status": "no_url"}
+    digest = content_hash(url)
+    if session.execute(select(RawItem.id).where(RawItem.content_hash == digest)).first():
+        return {"status": "duplicate"}
+
+    text, title, image = _content_for(payload, fetcher)
+    if not text:
+        return {"status": "no_content"}
+
+    source_name = payload.get("source_name") or "NewsAPI"
+    root = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+    source = get_or_create_source(session, source_name, root, "news", payload.get("region"))
+
+    stored = json.dumps(
+        {"url": url, "title": title, "body": text, "source": source_name, "image_url": image},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    raw_ref = storage.put(f"{digest}.json", stored)
+    raw = RawItem(
+        source_id=source.id, url=url, title=title, content_hash=digest,
+        raw_ref=raw_ref, image_url=image, published_at=_parse_dt(payload.get("published_at")),
+    )
+    session.add(raw)
+    session.commit()
+    return {"status": "raw_stored"}
 
 
 def maybe_rebuild(

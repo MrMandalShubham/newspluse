@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     DateTime,
     Float,
     ForeignKey,
@@ -95,6 +96,8 @@ class NewsPulseArticle(Base):
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     signal_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
     topic_velocity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    importance_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    event_types: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

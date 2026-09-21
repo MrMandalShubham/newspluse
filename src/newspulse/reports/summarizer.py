@@ -18,6 +18,12 @@ MAX_BODY_CHARS = 8000
 
 CATEGORIES = {"brand", "market", "regulatory", "ingredient", "retail", "consumer"}
 SENTIMENTS = {"positive", "neutral", "negative"}
+# Event-type taxonomy the client asked for (news "what happened"), multi-value.
+EVENT_TYPES = {
+    "Acquisition", "M&A", "Launch", "Regulatory", "Retail",
+    "Ingredient", "Competitor", "Partnership", "Expansion", "Funding",
+}
+_EVENT_LOOKUP = {e.lower(): e for e in EVENT_TYPES}
 
 SYSTEM_PROMPT = (
     "You are a beauty-industry news analyst. Decide whether the article is about "
@@ -27,12 +33,20 @@ SYSTEM_PROMPT = (
     '"category": one of ["brand","market","regulatory","ingredient","retail","consumer"], '
     '"sentiment": one of ["positive","neutral","negative"], '
     '"theme": a short topic tag (e.g. "barrier repair", "clean fragrance"), '
+    '"event_types": a list of one or more of '
+    '["Acquisition","M&A","Launch","Regulatory","Retail","Ingredient","Competitor",'
+    '"Partnership","Expansion","Funding"] describing what happened, '
+    '"importance_score": an integer 1-10 for how impactful this news is to the '
+    "beauty industry (10 = major M&A / regulation / market shift; 1 = minor blog note), "
+    '"country": the country the news is chiefly about (full English name, e.g. '
+    '"South Korea", "Japan", "China", or "" if unclear), '
     '"label": a short descriptive title, '
-    '"summary": a 2-4 sentence summary of the product news, '
-    '"brands": [beauty brand names], '
+    '"summary": an informative 3-5 sentence summary that covers WHAT happened, '
+    "WHY it matters, and the likely IMPACT on the market or category, "
+    '"brands": [beauty brand names mentioned], '
     '"companies": [parent companies or manufacturers], '
-    '"ingredients": [key ingredients], '
-    '"products": [specific named products]}. '
+    '"ingredients": [key ingredients mentioned], '
+    '"products": [specific named products mentioned]}. '
     "If it is NOT about beauty products (pure wellbeing, celebrity, general lifestyle), "
     "set is_product_related=false and keep the other fields brief or empty."
 )
@@ -45,6 +59,9 @@ class ArticleSummary(BaseModel):
     theme: str = ""
     label: str = ""
     summary: str = ""
+    event_types: list[str] = Field(default_factory=list)
+    importance_score: int = 0
+    country: str = ""
     brands: list[str] = Field(default_factory=list)
     companies: list[str] = Field(default_factory=list)
     ingredients: list[str] = Field(default_factory=list)
@@ -96,6 +113,24 @@ class MistralSummarizer(Summarizer):
         return [str(v).strip() for v in value if str(v).strip()]
 
     @staticmethod
+    def _event_types(value: object) -> list[str]:
+        """Normalize event types to the known taxonomy (case-insensitive, deduped)."""
+        out: list[str] = []
+        for v in MistralSummarizer._as_list(value):
+            canon = _EVENT_LOOKUP.get(v.lower())
+            if canon and canon not in out:
+                out.append(canon)
+        return out
+
+    @staticmethod
+    def _importance(value: object) -> int:
+        try:
+            n = int(float(value))
+        except (TypeError, ValueError):
+            return 0
+        return max(1, min(10, n)) if n else 0
+
+    @staticmethod
     def parse(content: str) -> ArticleSummary:
         try:
             obj = json.loads(content)
@@ -112,6 +147,9 @@ class MistralSummarizer(Summarizer):
             theme=str(obj.get("theme") or "").strip(),
             label=str(obj.get("label") or "").strip(),
             summary=str(obj.get("summary") or "").strip(),
+            event_types=MistralSummarizer._event_types(obj.get("event_types")),
+            importance_score=MistralSummarizer._importance(obj.get("importance_score")),
+            country=str(obj.get("country") or "").strip(),
             brands=MistralSummarizer._as_list(obj.get("brands")),
             companies=MistralSummarizer._as_list(obj.get("companies")),
             ingredients=MistralSummarizer._as_list(obj.get("ingredients")),
