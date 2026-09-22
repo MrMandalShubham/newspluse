@@ -396,9 +396,18 @@ retail SKU data in the DB (not the 12,300 cited in the review):
 | `retail_pulse_shelf_share` | 5,771 |
 
 `products_master` (6,399) breaks down as: **Olive Young Global 2,087, @cosme 302,
-newspulse 4,010** (products first seen in the news). A news product chip that
+newspulse ~3,800** (products first seen in the news). A news product chip that
 resolves to an Olive Young / @cosme row can deep-link to Retail Pulse; a
 `data_source='newspulse'` row is news-only until retail data is attached.
+
+**Matching (improved):** news names are linked to the catalog by a matcher that
+normalizes (lowercase, strips size/volume tokens), applies brand aliases, and
+falls back to fuzzy matching (rapidfuzz), **preferring real retail SKUs** over
+news-only rows, with products scoped to the article's brands for precision. After
+a rematch pass over the existing corpus, articles link to **136 distinct real
+retail products (323 links)**, up ~2x from exact-only matching, with **no new
+duplicate rows**. The ceiling is the retail catalog itself (OY + @cosme = ~2,389
+SKUs); news that covers other retailers/brands legitimately has no retail row yet.
 
 ## 13. Market de-duplication — [Bolt] (UI) + [Backend] (data)
 

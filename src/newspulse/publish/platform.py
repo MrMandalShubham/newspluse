@@ -19,6 +19,7 @@ from sqlalchemy.exc import OperationalError
 from newspulse.config import settings
 from newspulse.db import Base, SessionLocal
 from newspulse.models import ArticleReport, RawItem, ReportCluster, Source
+from newspulse.publish.matcher import CatalogMatcher
 from newspulse.publish.models import (
     Company,
     Ingredient,
@@ -379,6 +380,139 @@ def refresh_platform_signals(batch: int = 100) -> dict:
     finally:
         plat.dispose()
     return {"updated": updated}
+
+
+def _create_brand(conn, name: str) -> object:
+    bid = uuid.uuid4()
+    conn.execute(
+        text("insert into brands(id,code,name,created_at) values(:id,:c,:n, now())"),
+        {"id": bid, "c": f"{_slug(name)}-{bid.hex[:6]}", "n": name},
+    )
+    return bid
+
+
+def _create_product(conn, name: str) -> object:
+    pid = uuid.uuid4()
+    conn.execute(
+        text("insert into products_master(id,name,data_source,created_at,updated_at) "
+             "values(:id,:n,'newspulse', now(), now())"),
+        {"id": pid, "n": name},
+    )
+    return pid
+
+
+def _create_lookup(conn, table: str, name: str) -> object:
+    eid = uuid.uuid4()
+    conn.execute(
+        text(f"insert into {table}(id,name,created_at) values(:id,:n, now())"),
+        {"id": eid, "n": name},
+    )
+    return eid
+
+
+def rematch_platform_links() -> dict:
+    """Re-resolve existing articles' entity links with the retail-preferring matcher.
+
+    For every published article, re-match its extracted brand/product/company/
+    ingredient names, PREFERRING real retail SKUs (Olive Young / @cosme) over the
+    news-only rows created earlier, and rewrite its junction rows. Runs one
+    transaction per article (pre-ping + retry), so a transient DO drop only
+    retries that article. New catalog rows are registered in the matcher only
+    after their article commits, keeping memory and DB consistent across retries.
+    """
+    data = _collect_rows()
+    plat = create_engine(settings.publish_database_url, pool_pre_ping=True)
+    stats = {
+        "articles": 0, "brand_links": 0, "product_links": 0, "product_retail_links": 0,
+        "company_links": 0, "ingredient_links": 0, "brands_new": 0, "products_new": 0,
+        "companies_new": 0, "ingredients_new": 0, "no_article": 0,
+    }
+    try:
+        with plat.connect() as rc:
+            matcher = CatalogMatcher(rc)
+        for d in data:
+            for attempt in range(4):
+                try:
+                    created: list[tuple[str, str, object]] = []
+                    local = {"brand": 0, "product": 0, "retail": 0, "company": 0, "ingredient": 0}
+                    with plat.begin() as conn:
+                        row = conn.execute(
+                            text("select id from news_pulse_articles where url=:u"),
+                            {"u": d["url"]},
+                        ).first()
+                        if not row:
+                            stats["no_article"] += 1
+                            break
+                        aid = row[0]
+                        brand_ids = []
+                        for name in _unique(d["brands"]):
+                            bid = matcher.match_brand(name)
+                            if bid is None:
+                                bid = _create_brand(conn, name)
+                                created.append(("brand", name, bid))
+                            brand_ids.append(bid)
+                        product_ids = []
+                        for name in _unique(d["products"]):
+                            pid = matcher.match_product(name, brand_ids)
+                            if pid is None:
+                                pid = _create_product(conn, name)
+                                created.append(("product", name, pid))
+                            elif matcher.is_retail(pid):
+                                local["retail"] += 1
+                            product_ids.append(pid)
+                        company_ids = []
+                        for name in _unique(d["companies"]):
+                            cid = matcher.match_lookup("companies", name)
+                            if cid is None:
+                                cid = _create_lookup(conn, "companies", name)
+                                created.append(("companies", name, cid))
+                            company_ids.append(cid)
+                        ingredient_ids = []
+                        for name in _unique(d["ingredients"]):
+                            iid = matcher.match_lookup("ingredients", name)
+                            if iid is None:
+                                iid = _create_lookup(conn, "ingredients", name)
+                                created.append(("ingredients", name, iid))
+                            ingredient_ids.append(iid)
+                        for tbl in _JUNCTIONS:
+                            conn.execute(text(f"delete from {tbl} where article_id=:a"), {"a": aid})
+                        for bid in dict.fromkeys(brand_ids):
+                            _link(conn, "news_article_brands", "brand_id", aid, bid)
+                            local["brand"] += 1
+                        for pid in dict.fromkeys(product_ids):
+                            _link(conn, "news_article_products", "product_id", aid, pid)
+                            local["product"] += 1
+                        for cid in dict.fromkeys(company_ids):
+                            _link(conn, "news_article_companies", "company_id", aid, cid)
+                            local["company"] += 1
+                        for iid in dict.fromkeys(ingredient_ids):
+                            _link(conn, "news_article_ingredients", "ingredient_id", aid, iid)
+                            local["ingredient"] += 1
+                    # committed -> register new rows + merge counts
+                    for kind, name, eid in created:
+                        if kind == "brand":
+                            matcher.add_brand(name, eid)
+                            stats["brands_new"] += 1
+                        elif kind == "product":
+                            matcher.add_product(name, eid)
+                            stats["products_new"] += 1
+                        else:  # "companies" | "ingredients"
+                            matcher.add_lookup(kind, name, eid)
+                            stats[f"{kind}_new"] += 1
+                    stats["brand_links"] += local["brand"]
+                    stats["product_links"] += local["product"]
+                    stats["product_retail_links"] += local["retail"]
+                    stats["company_links"] += local["company"]
+                    stats["ingredient_links"] += local["ingredient"]
+                    stats["articles"] += 1
+                    break
+                except OperationalError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(2 ** attempt)
+    finally:
+        plat.dispose()
+    return stats
 
 
 def main() -> None:
