@@ -261,6 +261,39 @@ _BRAND_COUNT_VIEW = (
 )
 
 
+def _slug_sql(col: str, fallback: str) -> str:
+    """SQL expression building a URL-safe, unique slug: {name-slug}-{id6}."""
+    base = f"trim(both '-' from regexp_replace(lower({col}),'[^a-z0-9]+','-','g'))"
+    return (
+        f"coalesce(nullif(left({base},80),''),'{fallback}') "
+        "|| '-' || substr(replace(id::text,'-',''),1,6)"
+    )
+
+
+def _ensure_entity_slugs(conn) -> dict:
+    """Add + backfill stable slugs on brands/ingredients (and news-only products).
+
+    Brand/ingredient hubs need permanent URL slugs. products_master already has a
+    slug (retail rows) so only news-created ones are filled. Additive + idempotent.
+    """
+    out = {}
+    for tbl, fallback in (("brands", "brand"), ("ingredients", "ingredient")):
+        conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS slug TEXT"))
+        conn.execute(
+            text(f"CREATE INDEX IF NOT EXISTS ix_{tbl}_slug ON {tbl}(slug)")
+        )
+        r = conn.execute(
+            text(f"UPDATE {tbl} SET slug = {_slug_sql('name', fallback)} WHERE slug IS NULL")
+        )
+        out[f"{tbl}_slugs"] = r.rowcount
+    r = conn.execute(
+        text(f"UPDATE products_master SET slug = {_slug_sql('name', 'product')} "
+             "WHERE slug IS NULL AND data_source='newspulse'")
+    )
+    out["product_slugs"] = r.rowcount
+    return out
+
+
 def _finalize(conn) -> dict:
     """Idempotent post-publish: backfill missing slugs + (re)create brand-count view."""
     rows = conn.execute(
@@ -271,8 +304,9 @@ def _finalize(conn) -> dict:
             text("update news_pulse_articles set slug=:s where id=:id"),
             {"s": article_slug(r.headline, r.id), "id": r.id},
         )
+    entity = _ensure_entity_slugs(conn)
     conn.execute(text(_BRAND_COUNT_VIEW))
-    return {"slugs_backfilled": len(rows)}
+    return {"article_slugs_backfilled": len(rows), **entity}
 
 
 def finalize_platform() -> dict:
