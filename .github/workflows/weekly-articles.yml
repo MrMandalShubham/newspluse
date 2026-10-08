@@ -1,0 +1,42 @@
+name: Weekly Article Update
+
+on:
+  schedule:
+    # Every Saturday at 6:00 AM UTC (11:30 AM IST)
+    - cron: '0 6 * * 6'
+  workflow_dispatch:
+    # Allow manual trigger from GitHub Actions UI
+
+jobs:
+  weekly-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Run weekly update
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PUBLISH_DATABASE_URL: ${{ secrets.PUBLISH_DATABASE_URL }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MISTRAL_MODEL: mistral-small-latest
+          APP_ENV: production
+        run: python -m newspulse.feeds.weekly_update
+
+      - name: Summary
+        if: always()
+        run: echo "Weekly article update completed at $(date -u)"

@@ -35,6 +35,12 @@ QUERIES: list[tuple[str, str]] = [
            'OR winona OR herborist OR chando'),
     ("JP", 'j-beauty OR japanese skincare OR shiseido OR sk-ii OR "hada labo" OR kose '
            'OR canmake OR "hong kong" beauty OR "sa sa" OR indonesia skincare'),
+    ("IN", 'india beauty OR indian skincare OR nykaa OR mamaearth OR "forest essentials" '
+           'OR plum OR "lotus herbals" OR biotique OR "lakme" OR minimalist skincare'),
+    ("TH", 'thai beauty OR thailand skincare OR srichand OR "cathy doll" OR mistine '
+           'OR "baby bright" OR beauty buffet OR thailand cosmetics'),
+    ("TW", 'taiwan beauty OR taiwanese skincare OR "dr wu" OR "my beauty diary" '
+           'OR "lovemore" OR "naruko" OR taiwan cosmetics OR poya beauty'),
 ]
 
 

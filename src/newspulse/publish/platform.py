@@ -23,11 +23,14 @@ from newspulse.publish.matcher import CatalogMatcher
 from newspulse.publish.models import (
     Company,
     Ingredient,
+    Lead,
     NewsArticleBrand,
     NewsArticleCompany,
     NewsArticleIngredient,
     NewsArticleProduct,
     NewsPulseArticle,
+    TopicCluster,
+    TopicClusterMember,
 )
 
 # Only these tables are created in the platform DB (existing ones are reused).
@@ -39,6 +42,9 @@ NEW_TABLES = [
     NewsArticleCompany.__table__,
     NewsArticleIngredient.__table__,
     NewsArticleProduct.__table__,
+    TopicCluster.__table__,
+    TopicClusterMember.__table__,
+    Lead.__table__,
 ]
 
 MARKET_MAP = {
@@ -50,6 +56,8 @@ MARKET_MAP = {
     "GB": ("United Kingdom", "GB", "🇬🇧"),
     "CN": ("China", "CN", "🇨🇳"),
     "HK": ("Hong Kong", "HK", "🇭🇰"),
+    "TH": ("Thailand", "TH", "🇹🇭"),
+    "TW": ("Taiwan", "TW", "🇹🇼"),
 }
 
 _JUNCTIONS = ("news_article_brands", "news_article_companies",
@@ -66,6 +74,8 @@ COUNTRY_TO_REGION = {
     "united states": "US", "usa": "US", "u.s.": "US",
     "united states of america": "US", "america": "US",
     "united kingdom": "GB", "uk": "GB", "u.k.": "GB", "britain": "GB", "england": "GB",
+    "thailand": "TH",
+    "taiwan": "TW", "republic of china": "TW",
 }
 
 
@@ -181,6 +191,7 @@ def _upsert_article(conn, d, market_id):
         "topic_velocity": d["topic_velocity"],
         "importance_score": d["importance_score"],
         "event_types": json.dumps(d["event_types"] or []),
+        "story_id": d.get("story_id"),
     }
     row = conn.execute(
         text("select id from news_pulse_articles where url=:u"), {"u": d["url"]}
@@ -193,18 +204,18 @@ def _upsert_article(conn, d, market_id):
                  "category=:category, sentiment=:sentiment, theme=:theme, reach=:reach, "
                  "image_url=:image_url, published_at=:published_at, signal_tier=:signal_tier, "
                  "topic_velocity=:topic_velocity, importance_score=:importance_score, "
-                 "event_types=cast(:event_types as jsonb) where id=:id"),
+                 "event_types=cast(:event_types as jsonb), story_id=:story_id where id=:id"),
             {**fields, "id": aid},
         )
     else:
         aid = uuid.uuid4()
         conn.execute(
-            text("insert into news_pulse_articles(id,slug,url,headline,summary,source,"
+            text("insert into news_pulse_articles(id,slug,story_id,url,headline,summary,source,"
                  "source_tier,market_id,category,sentiment,theme,reach,image_url,published_at,"
                  "signal_tier,topic_velocity,importance_score,event_types,created_at) values("
-                 ":id,:slug,:url,:headline,:summary,:source,:source_tier,:market_id,:category,"
-                 ":sentiment,:theme,:reach,:image_url,:published_at,:signal_tier,:topic_velocity,"
-                 ":importance_score,cast(:event_types as jsonb), now())"),
+                 ":id,:slug,:story_id,:url,:headline,:summary,:source,:source_tier,:market_id,"
+                 ":category,:sentiment,:theme,:reach,:image_url,:published_at,:signal_tier,"
+                 ":topic_velocity,:importance_score,cast(:event_types as jsonb), now())"),
             {**fields, "id": aid, "url": d["url"], "slug": article_slug(d["headline"], aid)},
         )
     for tbl in _JUNCTIONS:
@@ -232,9 +243,12 @@ def _collect_rows() -> list[dict]:
         out = []
         for ar, ri, src in rows:
             size = 1
+            story_id = None
             if ar.cluster_id is not None:
                 cluster = work.get(ReportCluster, ar.cluster_id)
-                size = cluster.size if cluster else 1
+                if cluster:
+                    size = cluster.size
+                    story_id = f"story-{cluster.id}"
             out.append({
                 "url": ri.url, "headline": ar.title or ri.title or ri.url,
                 "image_url": ri.image_url,
@@ -247,6 +261,7 @@ def _collect_rows() -> list[dict]:
                 "published_at": ri.published_at, "signal_tier": _signal_tier(size),
                 "topic_velocity": float(size), "brands": ar.brands, "companies": ar.companies,
                 "ingredients": ar.ingredients, "products": ar.products,
+                "story_id": story_id,
             })
         return out
     finally:
@@ -353,6 +368,13 @@ def publish_to_platform() -> dict:
             text("CREATE INDEX IF NOT EXISTS ix_news_pulse_articles_slug "
                  "ON news_pulse_articles(slug)")
         )
+        conn.execute(
+            text("ALTER TABLE news_pulse_articles ADD COLUMN IF NOT EXISTS story_id TEXT")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_news_pulse_articles_story_id "
+                 "ON news_pulse_articles(story_id)")
+        )
     data = _collect_rows()
     stats = {"articles": 0, "brands_matched": 0, "brands_new": 0,
              "products_matched": 0, "products_new": 0, "markets_new": 0}
@@ -401,9 +423,11 @@ def refresh_platform_signals(batch: int = 100) -> dict:
                         for d in chunk:
                             conn.execute(
                                 text("update news_pulse_articles set signal_tier=:st, "
-                                     "topic_velocity=:tv, importance_score=:imp where url=:u"),
+                                     "topic_velocity=:tv, importance_score=:imp, "
+                                     "story_id=:sid where url=:u"),
                                 {"st": d["signal_tier"], "tv": d["topic_velocity"],
-                                 "imp": d["importance_score"], "u": d["url"]},
+                                 "imp": d["importance_score"], "sid": d["story_id"],
+                                 "u": d["url"]},
                             )
                     updated += len(chunk)
                     break
@@ -547,6 +571,133 @@ def rematch_platform_links() -> dict:
     finally:
         plat.dispose()
     return stats
+
+
+def _collect_clusters() -> list[dict]:
+    """Gather cluster data from the working DB for topic_clusters publish."""
+    from collections import Counter
+
+    work = SessionLocal()
+    try:
+        clusters = work.execute(
+            select(ReportCluster).where(ReportCluster.size >= 2).order_by(ReportCluster.id)
+        ).scalars().all()
+        out = []
+        for cl in clusters:
+            members = work.execute(
+                select(ArticleReport, RawItem, Source)
+                .join(RawItem, RawItem.id == ArticleReport.raw_item_id)
+                .join(Source, Source.id == RawItem.source_id)
+                .where(ArticleReport.cluster_id == cl.id)
+            ).all()
+            if not members:
+                continue
+
+            countries = Counter()
+            categories = Counter()
+            sentiments = []
+            urls = []
+            for ar, ri, src in members:
+                region = _country_to_region(ar.country) or src.region
+                if region:
+                    countries[region] += 1
+                if ar.category:
+                    categories[ar.category] += 1
+                if ar.sentiment:
+                    sentiments.append(ar.sentiment)
+                urls.append(ri.url)
+
+            primary_country = countries.most_common(1)[0][0] if countries else None
+            is_mixed_country = len(countries) > 1 and (
+                countries.most_common(1)[0][1] / sum(countries.values()) < 0.6
+            )
+            primary_category = categories.most_common(1)[0][0] if categories else None
+            is_mixed_category = len(categories) > 1 and (
+                categories.most_common(1)[0][1] / sum(categories.values()) < 0.6
+            )
+
+            pos = sum(1 for s in sentiments if s == "positive")
+            neg = sum(1 for s in sentiments if s == "negative")
+            total_s = len(sentiments)
+            if total_s:
+                sentiment = "positive" if pos / total_s > 0.5 else (
+                    "negative" if neg / total_s > 0.5 else "mixed"
+                )
+            else:
+                sentiment = None
+
+            out.append({
+                "internal_id": cl.id,
+                "name": cl.label,
+                "description": cl.summary,
+                "article_count": cl.size,
+                "source_count": len({src.name for _, _, src in members}),
+                "primary_country": primary_country if not is_mixed_country else None,
+                "primary_category": primary_category if not is_mixed_category else None,
+                "is_mixed_country": is_mixed_country,
+                "is_mixed_category": is_mixed_category,
+                "sentiment": sentiment,
+                "velocity": float(cl.size),
+                "urls": urls,
+            })
+        return out
+    finally:
+        work.close()
+
+
+def publish_topic_clusters() -> dict:
+    """Publish topic_clusters + members to the platform DB.
+
+    Atomic: truncates both tables and re-inserts in one transaction.
+    If the transaction fails, old data is preserved (rollback).
+    """
+    cluster_data = _collect_clusters()
+    plat = create_engine(settings.publish_database_url, pool_pre_ping=True)
+    stats = {"clusters": 0, "members": 0, "skipped_no_article": 0}
+    try:
+        with plat.begin() as conn:
+            conn.execute(text("DELETE FROM topic_cluster_members"))
+            conn.execute(text("DELETE FROM topic_clusters"))
+
+            for cd in cluster_data:
+                cid = uuid.uuid4()
+                slug = re.sub(r"[^a-z0-9]+", "-", cd["name"].lower()).strip("-")[:80]
+                slug = f"{slug}-{cid.hex[:6]}" if slug else f"topic-{cid.hex[:6]}"
+
+                conn.execute(text(
+                    "INSERT INTO topic_clusters(id, name, slug, description, "
+                    "article_count, source_count, primary_country, primary_category, "
+                    "is_mixed_country, is_mixed_category, sentiment, velocity, "
+                    "created_at, updated_at) VALUES ("
+                    ":id, :name, :slug, :desc, :acnt, :scnt, :pc, :pcat, "
+                    ":imc, :imcat, :sent, :vel, now(), now())"
+                ), {
+                    "id": cid, "name": cd["name"], "slug": slug,
+                    "desc": cd["description"],
+                    "acnt": cd["article_count"], "scnt": cd["source_count"],
+                    "pc": cd["primary_country"], "pcat": cd["primary_category"],
+                    "imc": cd["is_mixed_country"], "imcat": cd["is_mixed_category"],
+                    "sent": cd["sentiment"], "vel": cd["velocity"],
+                })
+                stats["clusters"] += 1
+
+                for url in cd["urls"]:
+                    row = conn.execute(
+                        text("SELECT id FROM news_pulse_articles WHERE url = :u"),
+                        {"u": url},
+                    ).first()
+                    if row:
+                        conn.execute(text(
+                            "INSERT INTO topic_cluster_members(cluster_id, article_id) "
+                            "VALUES(:cid, :aid) ON CONFLICT DO NOTHING"
+                        ), {"cid": cid, "aid": row[0]})
+                        stats["members"] += 1
+                    else:
+                        stats["skipped_no_article"] += 1
+
+        return stats
+    finally:
+        plat.dispose()
 
 
 def main() -> None:

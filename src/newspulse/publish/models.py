@@ -9,6 +9,9 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
     JSON,
     DateTime,
     Float,
@@ -81,6 +84,7 @@ class NewsPulseArticle(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     slug: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    story_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     headline: Mapped[str] = mapped_column(Text)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -101,6 +105,84 @@ class NewsPulseArticle(Base):
     event_types: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class TopicCluster(Base):
+    __tablename__ = "topic_clusters"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255))
+    slug: Mapped[str] = mapped_column(String(255), unique=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    article_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_count: Mapped[int] = mapped_column(Integer, default=0)
+    primary_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    primary_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    is_mixed_country: Mapped[bool] = mapped_column(default=False)
+    is_mixed_category: Mapped[bool] = mapped_column(default=False)
+    sentiment: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    velocity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class TopicClusterMember(Base):
+    __tablename__ = "topic_cluster_members"
+
+    cluster_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("topic_clusters.id", ondelete="CASCADE"), primary_key=True
+    )
+    article_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("news_pulse_articles.id", ondelete="CASCADE"), primary_key=True
+    )
+    similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class Lead(Base):
+    __tablename__ = "leads"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('news-pulse','newsletter','contact-form',"
+            "'agency-site','download-report','other')",
+            name="leads_source_check",
+        ),
+        CheckConstraint(
+            "status IN ('pending','confirmed','subscribed',"
+            "'unsubscribed','converted','bounced')",
+            name="leads_status_check",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    company: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    country_interest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    utm_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    utm_medium: Mapped[str | None] = mapped_column(Text, nullable=True)
+    utm_campaign: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    unsubscribed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_email_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
 
