@@ -68,7 +68,8 @@ def weekly_update() -> dict:
     try:
         tc = publish_topic_clusters()
         results["topic_clusters"] = tc
-        print(f"[weekly] {tc.get('clusters', 0)} clusters, {tc.get('members', 0)} members", flush=True)
+        clusters, members = tc.get("clusters", 0), tc.get("members", 0)
+        print(f"[weekly] {clusters} clusters, {members} members", flush=True)
     except Exception as e:
         print(f"[weekly] ERROR: topic clusters failed: {e}", flush=True)
         results["topic_clusters_error"] = str(e)

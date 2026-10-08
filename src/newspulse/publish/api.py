@@ -17,7 +17,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from newspulse.config import settings
@@ -286,9 +286,9 @@ def _build_article(row, session: Session) -> ArticleOut:
 @router.get("/articles", response_model=ArticleListOut)
 def list_articles(
     brand: str | None = Query(None, description="Filter by brand slug"),
-    market: str | None = Query(None, description="Filter by market code (KR, CN, JP, IN, TH, TW...)"),
-    signal: str | None = Query(None, description="Filter by signal_tier (HOT, WARM, WATCH, NOISE)"),
-    event_type: str | None = Query(None, description="Filter by event type (e.g. Launch, Acquisition)"),
+    market: str | None = Query(None, description="Filter by market code"),
+    signal: str | None = Query(None, description="Filter by signal_tier"),
+    event_type: str | None = Query(None, description="Filter by event type"),
     story: str | None = Query(None, description="Filter by story_id (group of related articles)"),
     q: str | None = Query(None, description="Search headline/summary"),
     sort: str = Query("recent", description="Sort: recent, importance, velocity"),

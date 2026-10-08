@@ -9,10 +9,9 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    CheckConstraint,
     JSON,
+    BigInteger,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
