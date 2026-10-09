@@ -1,8 +1,8 @@
-"""Article summarizer — classify beauty-product relevance + summarize (Mistral).
+"""Article summarizer — classify beauty-industry relevance + summarize (Mistral).
 
-One LLM call per article returns: is it about beauty products; a short label; a
-product-focused summary; and the named products/brands/ingredients. Malformed
-output degrades to "not relevant" rather than raising.
+One LLM call per article returns: is it relevant to the beauty/cosmetics/personal-care
+industry; a short label; a structured summary; and named entities. Malformed output
+degrades to "not relevant" rather than raising.
 """
 
 import json
@@ -26,9 +26,35 @@ EVENT_TYPES = {
 _EVENT_LOOKUP = {e.lower(): e for e in EVENT_TYPES}
 
 SYSTEM_PROMPT = (
-    "You are a beauty-industry news analyst. Decide whether the article is about "
-    "beauty PRODUCTS (specific products, brands, or ingredients/categories in a product "
-    "context) and extract structured fields. Return ONLY JSON: "
+    "You are a classifier and analyst for an Asia-focused beauty industry intelligence "
+    "platform.\n\n"
+    "FIRST QUESTION: Is this article relevant to the beauty, cosmetics, skincare, "
+    "personal care, haircare, fragrance/perfume, or related industry?\n"
+    "This includes: product launches, brand news, M&A/acquisitions, ingredient trends, "
+    "regulatory changes (cosmetics/MFDS/NMPA), retail expansion, beauty retail (Olive Young, "
+    "Sephora), K-beauty/J-beauty/C-beauty trends, OEM/ODM manufacturers (Cosmax, Kolmar), "
+    "packaging for beauty, beauty-tech, and beauty e-commerce.\n"
+    "This does NOT include: general business/trade news, fashion (unless beauty-related), "
+    "food/beverage, automotive, real estate, pure celebrity gossip, tech/smartphones, "
+    "pharma/medical (unless cosmeceutical), or general lifestyle.\n\n"
+    "CLASSIFICATION EXAMPLES:\n"
+    'Title: "L\'Oreal Reports Q3 Earnings Beat" -> is_product_related: true\n'
+    'Title: "Shiseido Launches New Anti-Aging Serum in Japan" -> is_product_related: true\n'
+    'Title: "MFDS Updates Sunscreen Filter Regulations" -> is_product_related: true\n'
+    'Title: "Amorepacific Acquires Stake in K-Beauty Startup" -> is_product_related: true\n'
+    'Title: "PDRN Emerges as Viral Anti-Aging Ingredient" -> is_product_related: true\n'
+    'Title: "Cosmax Opens New Manufacturing Facility in Thailand" -> is_product_related: true\n'
+    'Title: "Beauty Retailer Olive Young Expands to U.S." -> is_product_related: true\n'
+    'Title: "Celebrity Launches New Skincare Line" -> is_product_related: true\n'
+    'Title: "Shipping Container Prices Rise 12% in Q3" -> is_product_related: false\n'
+    'Title: "Real Estate Prices in Seoul Decline" -> is_product_related: false\n'
+    'Title: "General Trade News: Japan Exports Up 3%" -> is_product_related: false\n'
+    'Title: "Fashion Week Highlights: Street Style Trends" -> is_product_related: false\n'
+    'Title: "Celebrity Divorce Announcement" -> is_product_related: false\n'
+    'Title: "Automotive Industry Reports Strong Sales" -> is_product_related: false\n'
+    'Title: "Tech Company Launches New Smartphone" -> is_product_related: false\n'
+    'Title: "Hospital Reports New Cancer Treatment" -> is_product_related: false\n\n'
+    "After classifying, extract structured fields. Return ONLY JSON:\n"
     '{"is_product_related": true/false, '
     '"category": one of ["brand","market","regulatory","ingredient","retail","consumer"], '
     '"sentiment": one of ["positive","neutral","negative"], '
@@ -46,9 +72,8 @@ SYSTEM_PROMPT = (
     '"brands": [beauty brand names mentioned], '
     '"companies": [parent companies or manufacturers], '
     '"ingredients": [key ingredients mentioned], '
-    '"products": [specific named products mentioned]}. '
-    "If it is NOT about beauty products (pure wellbeing, celebrity, general lifestyle), "
-    "set is_product_related=false and keep the other fields brief or empty."
+    '"products": [specific named products mentioned]}.\n'
+    "If is_product_related is false, keep the other fields brief or empty."
 )
 
 
