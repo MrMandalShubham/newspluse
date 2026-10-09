@@ -12,6 +12,7 @@ import json
 import re
 import time
 import uuid
+from datetime import date, timedelta
 
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import OperationalError
@@ -230,16 +231,23 @@ def _link(conn, table, col, aid, eid):
     )
 
 
-def _collect_rows() -> list[dict]:
+def _collect_rows(since: date | None = None) -> list[dict]:
+    """Collect article rows from working DB.
+
+    When ``since`` is given, only articles created on or after that date are
+    returned — this makes incremental publishes fast (seconds instead of hours).
+    """
     work = SessionLocal()
     try:
-        rows = work.execute(
+        q = (
             select(ArticleReport, RawItem, Source)
             .join(RawItem, RawItem.id == ArticleReport.raw_item_id)
             .join(Source, Source.id == RawItem.source_id)
             .where(ArticleReport.is_product_related.is_(True))
-            .order_by(ArticleReport.id)
-        ).all()
+        )
+        if since is not None:
+            q = q.where(ArticleReport.created_at >= since)
+        rows = work.execute(q.order_by(ArticleReport.id)).all()
         out = []
         for ar, ri, src in rows:
             size = 1
@@ -345,10 +353,15 @@ def finalize_platform() -> dict:
         plat.dispose()
 
 
-def publish_to_platform() -> dict:
+def publish_to_platform(since: date | None = None) -> dict:
+    """Publish articles to platform DB.
+
+    ``since``: only publish articles created on/after this date. Defaults to
+    None (all articles — used for initial full publish). For weekly updates,
+    pass a date ~10 days back to cover the window with margin.
+    """
     plat = create_engine(settings.publish_database_url)
     Base.metadata.create_all(plat, tables=NEW_TABLES, checkfirst=True)
-    # Additive columns on our own table (safe, idempotent).
     with plat.begin() as conn:
         conn.execute(
             text("ALTER TABLE news_pulse_articles ADD COLUMN IF NOT EXISTS image_url TEXT")
@@ -375,7 +388,7 @@ def publish_to_platform() -> dict:
             text("CREATE INDEX IF NOT EXISTS ix_news_pulse_articles_story_id "
                  "ON news_pulse_articles(story_id)")
         )
-    data = _collect_rows()
+    data = _collect_rows(since=since)
     stats = {"articles": 0, "brands_matched": 0, "brands_new": 0,
              "products_matched": 0, "products_new": 0, "markets_new": 0}
     try:
@@ -403,7 +416,7 @@ def publish_to_platform() -> dict:
         plat.dispose()
 
 
-def refresh_platform_signals(batch: int = 100) -> dict:
+def refresh_platform_signals(batch: int = 100, since: date | None = None) -> dict:
     """Fast, resilient refresh of cluster-derived fields on existing articles.
 
     Updates only signal_tier, topic_velocity and importance_score (recomputed from
@@ -411,7 +424,7 @@ def refresh_platform_signals(batch: int = 100) -> dict:
     re-matching. Commits in batches with pre-ping + retry, so a transient DO
     connection drop only retries the current batch instead of losing the whole run.
     """
-    data = _collect_rows()
+    data = _collect_rows(since=since)
     plat = create_engine(settings.publish_database_url, pool_pre_ping=True)
     updated = 0
     try:

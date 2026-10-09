@@ -30,7 +30,7 @@ def weekly_update() -> dict:
 
     print("[weekly] Step 1/4: Pulling articles from Google News...", flush=True)
     try:
-        history = run_history(weeks=1, limit=30, rebuild=True, offset=0)
+        history = run_history(weeks=1, limit=20, rebuild=True, offset=0)
         results["ingest"] = history["totals"]
         results["clusters_built"] = history.get("rebuild")
         ingested = history["totals"].get("ingested", 0)
@@ -46,9 +46,12 @@ def weekly_update() -> dict:
         results["publish"] = "skipped"
         return results
 
+    since = today - timedelta(days=10)
+    print(f"[weekly] Publishing only articles since {since} (10-day window)", flush=True)
+
     print("[weekly] Step 2/4: Publishing articles to platform DB...", flush=True)
     try:
-        pub = publish_to_platform()
+        pub = publish_to_platform(since=since)
         results["publish"] = pub
         print(f"[weekly] Published {pub.get('articles', 0)} articles", flush=True)
     except Exception as e:
@@ -57,7 +60,7 @@ def weekly_update() -> dict:
 
     print("[weekly] Step 3/4: Refreshing signals...", flush=True)
     try:
-        sig = refresh_platform_signals()
+        sig = refresh_platform_signals(since=since)
         results["signals"] = sig
         print(f"[weekly] Updated {sig.get('updated', 0)} signals", flush=True)
     except Exception as e:
