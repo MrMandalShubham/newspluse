@@ -1,14 +1,14 @@
-name: Weekly Article Update
+name: Daily Article Update
 
 on:
   schedule:
-    # Every Saturday at 6:00 AM UTC (11:30 AM IST)
-    - cron: '0 6 * * 6'
+    # Every day at 4:00 AM HKT (8:00 PM UTC previous day)
+    - cron: '0 20 * * *'
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions UI
 
 jobs:
-  weekly-update:
+  daily-update:
     runs-on: ubuntu-latest
     timeout-minutes: 300
 
@@ -28,7 +28,7 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      - name: Run weekly update
+      - name: Run daily update
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PUBLISH_DATABASE_URL: ${{ secrets.PUBLISH_DATABASE_URL }}
@@ -39,4 +39,4 @@ jobs:
 
       - name: Summary
         if: always()
-        run: echo "Weekly article update completed at $(date -u)"
+        run: echo "Daily article update completed at $(date -u)"
