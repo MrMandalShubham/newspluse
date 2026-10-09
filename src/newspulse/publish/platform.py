@@ -12,7 +12,7 @@ import json
 import re
 import time
 import uuid
-from datetime import date, timedelta
+from datetime import date
 
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import OperationalError
