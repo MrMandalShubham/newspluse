@@ -86,7 +86,7 @@ def load_sources_from_csv(csv_path: str, session: Session | None = None) -> dict
                 name = f"{parts[0]}/{parts[1][:30]}"
 
         existing = session.execute(
-            select(Source).where(Source.url == url)
+            select(Source).where(Source.name == name)
         ).scalar_one_or_none()
 
         if existing:
@@ -99,20 +99,25 @@ def load_sources_from_csv(csv_path: str, session: Session | None = None) -> dict
                 existing.feed_url = RSS_FEEDS.get(domain)
             updated += 1
         else:
-            src = Source(
-                name=name,
-                url=url,
-                type="news",
-                region=country or gl,
-                scraper_class=scraper_class,
-                feed_url=RSS_FEEDS.get(domain),
-                query=query,
-                gl=gl,
-                hl=hl,
-                enabled=True,
-            )
-            session.add(src)
-            created += 1
+            try:
+                src = Source(
+                    name=name,
+                    url=url,
+                    type="news",
+                    region=country or gl,
+                    scraper_class=scraper_class,
+                    feed_url=RSS_FEEDS.get(domain),
+                    query=query,
+                    gl=gl,
+                    hl=hl,
+                    enabled=True,
+                )
+                session.add(src)
+                session.flush()
+                created += 1
+            except Exception:
+                session.rollback()
+                skipped += 1
 
     session.commit()
     if own_session:
