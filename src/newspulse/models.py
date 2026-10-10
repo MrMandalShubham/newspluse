@@ -41,6 +41,14 @@ class Source(Base):
     type: Mapped[str] = mapped_column(String(30))  # news | retail | social | reg
     region: Mapped[str | None] = mapped_column(String(50), nullable=True)
     trust_score: Mapped[float] = mapped_column(Float, default=0.5)
+    scraper_class: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    feed_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    query: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gl: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    hl: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
