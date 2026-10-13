@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     mistral_api_key: str = ""
     mistral_model: str = "mistral-small-latest"
 
+    # --- Klaviyo (email marketing / lead sync) ---
+    klaviyo_api_key: str = ""
+    klaviyo_list_id: str = ""
+
     # --- SerpAPI (search-based discovery for scattered beauty news) ---
     serpapi_key: str = ""
 

@@ -34,6 +34,8 @@ jobs:
           PUBLISH_DATABASE_URL: ${{ secrets.PUBLISH_DATABASE_URL }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           MISTRAL_MODEL: mistral-small-latest
+          KLAVIYO_API_KEY: ${{ secrets.KLAVIYO_API_KEY }}
+          KLAVIYO_LIST_ID: ${{ secrets.KLAVIYO_LIST_ID }}
           APP_ENV: production
         run: python -m newspulse.feeds.weekly_update
 

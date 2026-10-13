@@ -11,16 +11,20 @@ Endpoints:
     PATCH /api/news-pulse/leads/{id}       — update lead status (n8n)
 """
 
+import logging
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from newspulse.config import settings
+from newspulse.integrations import klaviyo as klaviyo_client
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/news-pulse", tags=["news-pulse"])
 
@@ -620,9 +624,39 @@ def _row_to_lead(row) -> LeadOut:
     )
 
 
+async def _sync_lead_to_klaviyo(
+    email: str,
+    name: str | None,
+    company: str | None,
+    job_title: str | None,
+    country: str | None,
+    source: str | None,
+    utm_source: str | None,
+    utm_medium: str | None,
+    utm_campaign: str | None,
+) -> None:
+    try:
+        profile_id = await klaviyo_client.upsert_profile(
+            email,
+            name=name,
+            company=company,
+            job_title=job_title,
+            country=country,
+            source=source,
+            utm_source=utm_source,
+            utm_medium=utm_medium,
+            utm_campaign=utm_campaign,
+        )
+        if profile_id:
+            await klaviyo_client.subscribe_to_list(profile_id)
+    except Exception:
+        log.exception("klaviyo: failed to sync new lead %s", email)
+
+
 @router.post("/leads", response_model=LeadOut, status_code=201)
 def create_lead(
     body: LeadCreateIn,
+    bg: BackgroundTasks,
     session: Session = Depends(get_platform_session),
 ) -> LeadOut:
     if body.source not in VALID_LEAD_SOURCES:
@@ -648,6 +682,15 @@ def create_lead(
         "utm_medium": body.utm_medium, "utm_campaign": body.utm_campaign,
     }).fetchone()
     session.commit()
+
+    bg.add_task(
+        _sync_lead_to_klaviyo,
+        email=body.email, name=body.name, company=body.company,
+        job_title=body.job_title, country=body.country_interest,
+        source=body.source, utm_source=body.utm_source,
+        utm_medium=body.utm_medium, utm_campaign=body.utm_campaign,
+    )
+
     return _row_to_lead(row)
 
 
@@ -700,10 +743,27 @@ def get_lead(
     return _row_to_lead(row)
 
 
+async def _sync_status_to_klaviyo(email: str, new_status: str) -> None:
+    try:
+        profile_id = await klaviyo_client.get_profile_by_email(email)
+        if not profile_id:
+            return
+        if new_status == "unsubscribed":
+            await klaviyo_client.suppress_profile(profile_id)
+        await klaviyo_client.track_event(
+            profile_id,
+            "Lead Status Changed",
+            {"new_status": new_status},
+        )
+    except Exception:
+        log.exception("klaviyo: failed to sync status for %s", email)
+
+
 @router.patch("/leads/{lead_id}", response_model=LeadOut)
 def update_lead(
     lead_id: int,
     body: LeadUpdateIn,
+    bg: BackgroundTasks,
     session: Session = Depends(get_platform_session),
 ) -> LeadOut:
     sets: list[str] = []
@@ -736,4 +796,8 @@ def update_lead(
     if not row:
         raise HTTPException(404, "lead not found")
     session.commit()
+
+    if body.status is not None:
+        bg.add_task(_sync_status_to_klaviyo, row.email, body.status)
+
     return _row_to_lead(row)
