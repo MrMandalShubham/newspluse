@@ -2,8 +2,8 @@ name: Daily Article Update
 
 on:
   schedule:
-    # Every day at 2:00 AM HKT (6:00 PM UTC previous day)
-    - cron: '0 18 * * *'
+    # Every day at ~2:37 AM HKT (6:37 PM UTC previous day)
+    - cron: '37 18 * * *'
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions UI
 
