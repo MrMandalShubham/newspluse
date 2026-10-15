@@ -12,7 +12,7 @@ import json
 import re
 import time
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import OperationalError
@@ -182,7 +182,33 @@ def _lookup_id(conn, table, name):
     return eid
 
 
+def _resolve_story_id(conn, headline: str, published_at, fallback_id: str | None) -> str | None:
+    """Find an existing story_id with a similar headline within 48h, or use the fallback."""
+    if not headline:
+        return fallback_id
+    row = conn.execute(
+        text(
+            "SELECT story_id, similarity(headline, :hl) AS sim "
+            "FROM news_pulse_articles "
+            "WHERE story_id IS NOT NULL "
+            "  AND published_at > :since "
+            "  AND similarity(headline, :hl) > 0.85 "
+            "ORDER BY sim DESC LIMIT 1"
+        ),
+        {"hl": headline, "since": published_at - _48H},
+    ).first()
+    if row:
+        return row.story_id
+    return fallback_id
+
+
+_48H = timedelta(hours=48)
+
+
 def _upsert_article(conn, d, market_id):
+    story_id = _resolve_story_id(
+        conn, d["headline"], d["published_at"], d.get("story_id"),
+    )
     fields = {
         "headline": d["headline"], "summary": d["summary"], "source": d["source"],
         "source_tier": d["source_tier"], "market_id": market_id, "category": d["category"],
@@ -192,7 +218,7 @@ def _upsert_article(conn, d, market_id):
         "topic_velocity": d["topic_velocity"],
         "importance_score": d["importance_score"],
         "event_types": json.dumps(d["event_types"] or []),
-        "story_id": d.get("story_id"),
+        "story_id": story_id,
     }
     row = conn.execute(
         text("select id from news_pulse_articles where url=:u"), {"u": d["url"]}
@@ -363,6 +389,7 @@ def publish_to_platform(since: date | None = None) -> dict:
     plat = create_engine(settings.publish_database_url)
     Base.metadata.create_all(plat, tables=NEW_TABLES, checkfirst=True)
     with plat.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         conn.execute(
             text("ALTER TABLE news_pulse_articles ADD COLUMN IF NOT EXISTS image_url TEXT")
         )
@@ -387,6 +414,10 @@ def publish_to_platform(since: date | None = None) -> dict:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_news_pulse_articles_story_id "
                  "ON news_pulse_articles(story_id)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_news_pulse_articles_headline_trgm "
+                 "ON news_pulse_articles USING gin(headline gin_trgm_ops)")
         )
     data = _collect_rows(since=since)
     stats = {"articles": 0, "brands_matched": 0, "brands_new": 0,
@@ -434,12 +465,15 @@ def refresh_platform_signals(batch: int = 100, since: date | None = None) -> dic
                 try:
                     with plat.begin() as conn:
                         for d in chunk:
+                            sid = _resolve_story_id(
+                                conn, d["headline"], d["published_at"], d.get("story_id"),
+                            )
                             conn.execute(
                                 text("update news_pulse_articles set signal_tier=:st, "
                                      "topic_velocity=:tv, importance_score=:imp, "
                                      "story_id=:sid where url=:u"),
                                 {"st": d["signal_tier"], "tv": d["topic_velocity"],
-                                 "imp": d["importance_score"], "sid": d["story_id"],
+                                 "imp": d["importance_score"], "sid": sid,
                                  "u": d["url"]},
                             )
                     updated += len(chunk)
