@@ -1,11 +1,17 @@
-name: Daily Article Update
+name: Article Update (2x daily)
 
 on:
   schedule:
-    # Every day at ~2:37 AM HKT (6:37 PM UTC previous day)
+    # Run 1: ~02:37 SGT/HKT (18:37 UTC) — fresh for Asia morning + EU end-of-day
     - cron: '37 18 * * *'
+    # Run 2: ~14:37 SGT/HKT (06:37 UTC) — fresh for US East morning + Asia lunch
+    - cron: '37 6 * * *'
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions UI
+
+concurrency:
+  group: article-update
+  cancel-in-progress: false
 
 jobs:
   daily-update:

@@ -6,7 +6,7 @@ and publishes to the platform DB.
 
     python -m newspulse.feeds.weekly_update
 
-Designed to run daily at 4 AM HKT via GitHub Actions.
+Designed to run 2x daily (02:37 + 14:37 SGT/HKT) via GitHub Actions.
 """
 
 import sys
