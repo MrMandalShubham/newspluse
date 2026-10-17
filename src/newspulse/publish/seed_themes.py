@@ -11,7 +11,6 @@ from sqlalchemy import create_engine, text
 
 from newspulse.config import settings
 from newspulse.db import Base
-from newspulse.publish.models import Theme, ThemeAlias, ThemeRelation
 
 THEMES = [
     {
@@ -21,7 +20,10 @@ THEMES = [
         "label_kr": "클린 뷰티",
         "label_jp": "クリーンビューティー",
         "label_zh": "清洁美容",
-        "description": "Products free from controversial ingredients, emphasizing transparency and safety.",
+        "description": (
+            "Products free from controversial ingredients,"
+            " emphasizing transparency and safety."
+        ),
         "type": "macro-trend",
         "lifecycle": "growth",
         "facet_geography": ["US", "KR", "GB"],
@@ -70,7 +72,10 @@ THEMES = [
         "label_kr": "레티놀",
         "label_jp": "レチノール",
         "label_zh": "视黄醇",
-        "description": "Vitamin A derivative used for anti-aging, acne treatment, and skin renewal.",
+        "description": (
+            "Vitamin A derivative used for anti-aging,"
+            " acne treatment, and skin renewal."
+        ),
         "type": "ingredient",
         "lifecycle": "mature",
         "facet_category": ["skincare"],
@@ -82,7 +87,10 @@ THEMES = [
         "label_kr": "나이아신아마이드",
         "label_jp": "ナイアシンアミド",
         "label_zh": "烟酰胺",
-        "description": "Vitamin B3 derivative for brightening, pore refinement, and barrier repair.",
+        "description": (
+            "Vitamin B3 derivative for brightening,"
+            " pore refinement, and barrier repair."
+        ),
         "type": "ingredient",
         "lifecycle": "growth",
         "facet_category": ["skincare"],
@@ -178,7 +186,10 @@ THEMES = [
         "label_kr": "남성 그루밍",
         "label_jp": "メンズグルーミング",
         "label_zh": "男士护理",
-        "description": "Growing market for skincare, haircare, and cosmetics targeting male consumers.",
+        "description": (
+            "Growing market for skincare, haircare,"
+            " and cosmetics targeting male consumers."
+        ),
         "type": "segment",
         "lifecycle": "growth",
         "facet_geography": ["KR", "CN", "IN"],
@@ -204,7 +215,10 @@ THEMES = [
         "label_kr": "안티에이징",
         "label_jp": "アンチエイジング",
         "label_zh": "抗衰老",
-        "description": "Products and ingredients targeting signs of aging: wrinkles, firmness, spots.",
+        "description": (
+            "Products and ingredients targeting signs"
+            " of aging: wrinkles, firmness, spots."
+        ),
         "type": "need",
         "lifecycle": "mature",
         "facet_category": ["skincare"],
@@ -236,7 +250,10 @@ THEMES = [
         "label_en": "Scalp Care",
         "label_kr": "두피 케어",
         "label_jp": "スカルプケア",
-        "description": "Targeted treatments for scalp health: exfoliation, microbiome balance, DHT blocking.",
+        "description": (
+            "Targeted treatments for scalp health:"
+            " exfoliation, microbiome balance, DHT blocking."
+        ),
         "type": "micro-trend",
         "lifecycle": "emerging",
         "facet_geography": ["KR", "JP"],
@@ -299,7 +316,6 @@ def _json(val):
 
 
 def seed_themes() -> dict:
-    from newspulse.publish.models import Theme, ThemeAlias, ThemeRelation  # noqa: F811
     from newspulse.publish.platform import NEW_TABLES
 
     plat = create_engine(settings.publish_database_url)

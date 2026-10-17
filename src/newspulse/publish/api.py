@@ -847,7 +847,7 @@ async def klaviyo_webhook(request: Request) -> dict:
     try:
         payload = await request.json()
     except Exception:
-        raise HTTPException(400, "invalid JSON body")
+        raise HTTPException(400, "invalid JSON body") from None
 
     event_type = (payload.get("type") or payload.get("event") or "").lower()
     email = None

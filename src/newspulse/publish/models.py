@@ -24,11 +24,11 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
-
-_JSONB = JSON().with_variant(PG_JSONB, "postgresql")
 from sqlalchemy.orm import Mapped, mapped_column
 
 from newspulse.db import Base
+
+_JSONB = JSON().with_variant(PG_JSONB, "postgresql")
 
 
 class Market(Base):
