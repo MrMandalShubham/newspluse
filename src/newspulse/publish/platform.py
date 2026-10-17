@@ -30,6 +30,9 @@ from newspulse.publish.models import (
     NewsArticleIngredient,
     NewsArticleProduct,
     NewsPulseArticle,
+    Theme,
+    ThemeAlias,
+    ThemeRelation,
     TopicCluster,
     TopicClusterMember,
 )
@@ -46,6 +49,9 @@ NEW_TABLES = [
     TopicCluster.__table__,
     TopicClusterMember.__table__,
     Lead.__table__,
+    Theme.__table__,
+    ThemeAlias.__table__,
+    ThemeRelation.__table__,
 ]
 
 MARKET_MAP = {
@@ -419,6 +425,11 @@ def publish_to_platform(since: date | None = None) -> dict:
             text("CREATE INDEX IF NOT EXISTS ix_news_pulse_articles_headline_trgm "
                  "ON news_pulse_articles USING gin(headline gin_trgm_ops)")
         )
+        for facet in ("geography", "category", "need", "ingredient", "values", "channel"):
+            conn.execute(
+                text(f"CREATE INDEX IF NOT EXISTS ix_themes_facet_{facet} "
+                     f"ON themes USING gin(facet_{facet} jsonb_path_ops)")
+            )
     data = _collect_rows(since=since)
     stats = {"articles": 0, "brands_matched": 0, "brands_new": 0,
              "products_matched": 0, "products_new": 0, "markets_new": 0}

@@ -15,12 +15,17 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+
+_JSONB = JSON().with_variant(PG_JSONB, "postgresql")
 from sqlalchemy.orm import Mapped, mapped_column
 
 from newspulse.db import Base
@@ -223,3 +228,96 @@ class NewsArticleProduct(Base):
     product_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("products_master.id"), primary_key=True
     )
+
+
+class Theme(Base):
+    __tablename__ = "themes"
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('ingredient','claim','macro-trend','micro-trend',"
+            "'segment','format','channel','need','value','geography',"
+            "'regulatory','sustainability')",
+            name="themes_type_check",
+        ),
+        CheckConstraint(
+            "lifecycle IN ('emerging','growth','mature','declining')",
+            name="themes_lifecycle_check",
+        ),
+        CheckConstraint(
+            "status IN ('active','draft','archived')",
+            name="themes_status_check",
+        ),
+        Index("ix_themes_type", "type"),
+        Index("ix_themes_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    slug: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    label_en: Mapped[str] = mapped_column(String(300), nullable=False)
+    label_fr: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    label_kr: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    label_jp: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    label_zh: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)
+    facet_geography: Mapped[list | None] = mapped_column(_JSONB, nullable=True)
+    facet_category: Mapped[list | None] = mapped_column(_JSONB, nullable=True)
+    facet_need: Mapped[list | None] = mapped_column(_JSONB, nullable=True)
+    facet_ingredient: Mapped[list | None] = mapped_column(_JSONB, nullable=True)
+    facet_values: Mapped[list | None] = mapped_column(_JSONB, nullable=True)
+    facet_channel: Mapped[list | None] = mapped_column(_JSONB, nullable=True)
+    ingredient_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ingredients.id", ondelete="SET NULL"), nullable=True
+    )
+    lifecycle: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("themes.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ThemeAlias(Base):
+    __tablename__ = "theme_aliases"
+    __table_args__ = (
+        CheckConstraint(
+            "alias_type IN ('synonym','abbreviation','misspelling','translation')",
+            name="theme_aliases_type_check",
+        ),
+        Index("ix_theme_aliases_theme_id", "theme_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    theme_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("themes.id", ondelete="CASCADE"), nullable=False
+    )
+    alias: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    alias_type: Mapped[str] = mapped_column(String(20), nullable=False, server_default="synonym")
+
+
+class ThemeRelation(Base):
+    __tablename__ = "theme_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_theme_id", "target_theme_id", "relation_type",
+            name="uq_theme_relations_src_tgt_type",
+        ),
+        Index("ix_theme_relations_source", "source_theme_id"),
+        Index("ix_theme_relations_target", "target_theme_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_theme_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("themes.id", ondelete="CASCADE"), nullable=False
+    )
+    target_theme_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("themes.id", ondelete="CASCADE"), nullable=False
+    )
+    relation_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    strength: Mapped[float | None] = mapped_column(Float, nullable=True)
