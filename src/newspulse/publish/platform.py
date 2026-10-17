@@ -415,6 +415,9 @@ def publish_to_platform(since: date | None = None) -> dict:
                  "ON news_pulse_articles(slug)")
         )
         conn.execute(
+            text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_tool_id TEXT")
+        )
+        conn.execute(
             text("ALTER TABLE news_pulse_articles ADD COLUMN IF NOT EXISTS story_id TEXT")
         )
         conn.execute(

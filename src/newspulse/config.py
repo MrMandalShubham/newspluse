@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # --- Klaviyo (email marketing / lead sync) ---
     klaviyo_api_key: str = ""
     klaviyo_list_id: str = ""
+    klaviyo_webhook_secret: str = ""
 
     # --- SerpAPI (search-based discovery for scattered beauty news) ---
     serpapi_key: str = ""

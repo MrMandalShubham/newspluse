@@ -172,6 +172,7 @@ class Lead(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     token: Mapped[str | None] = mapped_column(Text, nullable=True)
     stripe_customer_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email_tool_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
     utm_source: Mapped[str | None] = mapped_column(Text, nullable=True)
     utm_medium: Mapped[str | None] = mapped_column(Text, nullable=True)

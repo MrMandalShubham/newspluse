@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -211,6 +211,7 @@ class LeadOut(BaseModel):
     source: str
     status: str
     stripe_customer_id: str | None
+    email_tool_id: str | None
     utm_source: str | None
     utm_medium: str | None
     utm_campaign: str | None
@@ -617,6 +618,7 @@ def _row_to_lead(row) -> LeadOut:
         job_title=row.job_title, country_interest=row.country_interest,
         source=row.source, status=row.status,
         stripe_customer_id=row.stripe_customer_id,
+        email_tool_id=getattr(row, "email_tool_id", None),
         utm_source=row.utm_source, utm_medium=row.utm_medium,
         utm_campaign=row.utm_campaign, created_at=row.created_at,
         confirmed_at=row.confirmed_at, unsubscribed_at=row.unsubscribed_at,
@@ -649,8 +651,22 @@ async def _sync_lead_to_klaviyo(
         )
         if profile_id:
             await klaviyo_client.subscribe_to_list(profile_id)
+            _store_email_tool_id(email, profile_id)
     except Exception:
         log.exception("klaviyo: failed to sync new lead %s", email)
+
+
+def _store_email_tool_id(email: str, profile_id: str) -> None:
+    """Persist the Klaviyo profile ID in leads.email_tool_id."""
+    try:
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE leads SET email_tool_id = :pid WHERE email = :email"),
+                {"pid": profile_id, "email": email},
+            )
+    except Exception:
+        log.exception("failed to store email_tool_id for %s", email)
 
 
 @router.post("/leads", response_model=LeadOut, status_code=201)
@@ -743,9 +759,11 @@ def get_lead(
     return _row_to_lead(row)
 
 
-async def _sync_status_to_klaviyo(email: str, new_status: str) -> None:
+async def _sync_status_to_klaviyo(
+    email: str, new_status: str, email_tool_id: str | None = None,
+) -> None:
     try:
-        profile_id = await klaviyo_client.get_profile_by_email(email)
+        profile_id = email_tool_id or await klaviyo_client.get_profile_by_email(email)
         if not profile_id:
             return
         if new_status == "unsubscribed":
@@ -798,6 +816,105 @@ def update_lead(
     session.commit()
 
     if body.status is not None:
-        bg.add_task(_sync_status_to_klaviyo, row.email, body.status)
+        bg.add_task(
+            _sync_status_to_klaviyo, row.email, body.status,
+            getattr(row, "email_tool_id", None),
+        )
 
     return _row_to_lead(row)
+
+
+# ---------------------------------------------------------------------------
+# Klaviyo webhook — receives unsubscribe/subscribe events
+# ---------------------------------------------------------------------------
+
+_KLAVIYO_EVENT_TO_STATUS = {
+    "unsubscribed": "unsubscribed",
+    "subscribed": "subscribed",
+    "marked_as_spam": "unsubscribed",
+}
+
+
+@router.post("/webhooks/klaviyo", status_code=200)
+async def klaviyo_webhook(request: Request) -> dict:
+    """Handle Klaviyo webhook events (unsubscribe, subscribe, spam)."""
+    secret = settings.klaviyo_webhook_secret
+    if secret:
+        header_secret = request.headers.get("x-klaviyo-webhook-secret", "")
+        if header_secret != secret:
+            raise HTTPException(401, "invalid webhook secret")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "invalid JSON body")
+
+    event_type = (payload.get("type") or payload.get("event") or "").lower()
+    email = None
+    profile_id = None
+
+    data = payload.get("data", {})
+    attrs = data.get("attributes", {}) if isinstance(data, dict) else {}
+    profile_data = attrs.get("profile", {}).get("data", {})
+    if isinstance(profile_data, dict):
+        profile_attrs = profile_data.get("attributes", {})
+        email = profile_attrs.get("email")
+        profile_id = profile_data.get("id")
+
+    if not email:
+        email = (
+            attrs.get("email")
+            or payload.get("email")
+            or (data if isinstance(data, dict) else {}).get("email")
+        )
+    if not profile_id:
+        profile_id = (
+            attrs.get("profile_id")
+            or payload.get("profile_id")
+            or (data if isinstance(data, dict) else {}).get("id")
+        )
+
+    if not email and not profile_id:
+        log.warning("klaviyo webhook: no email or profile_id in payload")
+        return {"status": "ignored", "reason": "no identifiers"}
+
+    new_status = _KLAVIYO_EVENT_TO_STATUS.get(event_type)
+    if not new_status:
+        log.info("klaviyo webhook: ignoring event type '%s'", event_type)
+        return {"status": "ignored", "reason": f"unhandled event: {event_type}"}
+
+    engine = _get_engine()
+    with engine.begin() as conn:
+        if email:
+            row = conn.execute(
+                text("SELECT id, status FROM leads WHERE email = :e"), {"e": email},
+            ).first()
+        elif profile_id:
+            row = conn.execute(
+                text("SELECT id, status FROM leads WHERE email_tool_id = :pid"),
+                {"pid": profile_id},
+            ).first()
+        else:
+            row = None
+
+        if not row:
+            log.info("klaviyo webhook: lead not found for %s", email or profile_id)
+            return {"status": "ignored", "reason": "lead not found"}
+
+        if row.status == new_status:
+            return {"status": "ok", "detail": "already up to date"}
+
+        sets = ["status = :status"]
+        params: dict = {"status": new_status, "lid": row.id}
+        if new_status == "unsubscribed":
+            sets.append("unsubscribed_at = now()")
+
+        conn.execute(
+            text(f"UPDATE leads SET {', '.join(sets)} WHERE id = :lid"), params,
+        )
+
+    log.info(
+        "klaviyo webhook: updated lead %s -> %s (event=%s)",
+        row.id, new_status, event_type,
+    )
+    return {"status": "ok", "lead_id": row.id, "new_status": new_status}
