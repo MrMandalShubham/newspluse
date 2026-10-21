@@ -6,9 +6,11 @@ Endpoints:
     GET  /api/news-pulse/brands            — all brands with article counts
     GET  /api/news-pulse/markets           — all markets with article counts
     POST /api/news-pulse/leads             — capture a new lead
-    GET  /api/news-pulse/leads             — list leads (admin/n8n)
+    GET  /api/news-pulse/leads             — list leads (admin)
     GET  /api/news-pulse/leads/{id}        — single lead
-    PATCH /api/news-pulse/leads/{id}       — update lead status (n8n)
+    PATCH /api/news-pulse/leads/{id}       — update lead status
+    POST /api/news-pulse/webhooks/lead-event  — Vercel frontend → Klaviyo sync
+    POST /api/news-pulse/webhooks/klaviyo     — Klaviyo → DO status sync
 """
 
 import logging
@@ -672,7 +674,6 @@ def _store_email_tool_id(email: str, profile_id: str) -> None:
 @router.post("/leads", response_model=LeadOut, status_code=201)
 def create_lead(
     body: LeadCreateIn,
-    bg: BackgroundTasks,
     session: Session = Depends(get_platform_session),
 ) -> LeadOut:
     if body.source not in VALID_LEAD_SOURCES:
@@ -698,14 +699,6 @@ def create_lead(
         "utm_medium": body.utm_medium, "utm_campaign": body.utm_campaign,
     }).fetchone()
     session.commit()
-
-    bg.add_task(
-        _sync_lead_to_klaviyo,
-        email=body.email, name=body.name, company=body.company,
-        job_title=body.job_title, country=body.country_interest,
-        source=body.source, utm_source=body.utm_source,
-        utm_medium=body.utm_medium, utm_campaign=body.utm_campaign,
-    )
 
     return _row_to_lead(row)
 
@@ -918,3 +911,85 @@ async def klaviyo_webhook(request: Request) -> dict:
         row.id, new_status, event_type,
     )
     return {"status": "ok", "lead_id": row.id, "new_status": new_status}
+
+
+# ---------------------------------------------------------------------------
+# Lead-event webhook — replaces N8N_WEBHOOK_URL for Vercel frontend
+# ---------------------------------------------------------------------------
+
+class LeadEventIn(BaseModel):
+    lead_id: int | None = None
+    email: str | None = None
+    event: str
+
+
+@router.post("/webhooks/lead-event", status_code=200)
+async def lead_event_webhook(body: LeadEventIn) -> dict:
+    """Handle lead lifecycle events from the Vercel frontend.
+
+    Replaces N8N_WEBHOOK_URL. The frontend calls this after a lead
+    confirms their email, unsubscribes, etc.
+
+    Accepts: { lead_id?: int, email?: str, event: "confirmed"|"unsubscribed" }
+    """
+    if not body.lead_id and not body.email:
+        raise HTTPException(400, "provide lead_id or email")
+
+    engine = _get_engine()
+    with engine.connect() as conn:
+        if body.lead_id:
+            row = conn.execute(
+                text("SELECT * FROM leads WHERE id = :id"), {"id": body.lead_id},
+            ).first()
+        else:
+            row = conn.execute(
+                text("SELECT * FROM leads WHERE email = :e"), {"e": body.email},
+            ).first()
+
+    if not row:
+        raise HTTPException(404, "lead not found")
+
+    event = body.event.lower()
+
+    if event == "confirmed":
+        profile_id = await klaviyo_client.upsert_profile(
+            row.email,
+            name=row.name,
+            company=row.company,
+            job_title=row.job_title,
+            country=row.country_interest,
+            source=row.source,
+            utm_source=row.utm_source,
+            utm_medium=row.utm_medium,
+            utm_campaign=row.utm_campaign,
+        )
+        if profile_id:
+            await klaviyo_client.subscribe_to_list(profile_id)
+            _store_email_tool_id(row.email, profile_id)
+            await klaviyo_client.track_event(
+                profile_id, "Lead Confirmed", {"source": row.source},
+            )
+
+        log.info("lead-event: confirmed lead %s, klaviyo profile %s", row.id, profile_id)
+        return {"status": "ok", "lead_id": row.id, "klaviyo_profile_id": profile_id}
+
+    if event == "unsubscribed":
+        email_tool_id = getattr(row, "email_tool_id", None)
+        profile_id = email_tool_id or await klaviyo_client.get_profile_by_email(row.email)
+        if profile_id:
+            await klaviyo_client.suppress_profile(profile_id)
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE leads SET status = 'unsubscribed', "
+                    "unsubscribed_at = now() WHERE id = :id"
+                ),
+                {"id": row.id},
+            )
+
+        log.info("lead-event: unsubscribed lead %s", row.id)
+        return {"status": "ok", "lead_id": row.id, "new_status": "unsubscribed"}
+
+    log.info("lead-event: ignoring event '%s' for lead %s", event, row.id)
+    return {"status": "ignored", "reason": f"unhandled event: {event}"}
