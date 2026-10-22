@@ -5,6 +5,7 @@ The real /health endpoint arrives in Part 0.3; data endpoints in Phase 5.
 """
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from newspulse import __version__
@@ -14,6 +15,19 @@ from newspulse.db import engine
 from newspulse.publish.api import router as news_pulse_router
 
 app = FastAPI(title=settings.app_name, version=__version__)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://www.asiacosmepulse.com",
+        "https://asiacosmepulse.com",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(router)
 app.include_router(news_pulse_router)
 
