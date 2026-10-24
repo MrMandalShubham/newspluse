@@ -16,9 +16,9 @@ def test_extract_links_filters_nav():
     links = _extract_links(html, "https://example.com")
     assert "https://example.com/news/article-123" in links
     assert "https://example.com/news/breaking-story-456" in links
-    assert not any("/category/" in l for l in links)
-    assert not any("/about" in l for l in links)
-    assert not any("/login" in l for l in links)
+    assert not any("/category/" in link for link in links)
+    assert not any("/about" in link for link in links)
+    assert not any("/login" in link for link in links)
 
 
 def test_extract_links_same_domain_only():
@@ -30,7 +30,7 @@ def test_extract_links_same_domain_only():
     """
     links = _extract_links(html, "https://example.com")
     assert "https://example.com/news/art-1" in links
-    assert not any("other.com" in l for l in links)
+    assert not any("other.com" in link for link in links)
 
 
 def test_parse_sitemap_extracts_urls():
