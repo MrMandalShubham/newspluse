@@ -29,6 +29,25 @@ RSS_FEEDS: dict[str, str] = {
     "fashionsnap.com": "https://www.fashionsnap.com/rss.xml",
 }
 
+HTMLCRAWL_DOMAINS: set[str] = {
+    "c2cc.cn",
+    "pinguan.com",
+    "brandstar.com.cn",
+    "netvoices.cn",
+    "mktindex.com",
+    "koreajoongangdaily.joins.com",
+    "maquia.hpplus.jp",
+    "otonamuse.jp",
+    "syogyo.jp",
+    "pola.co.jp",
+    "kao.com",
+    "bkn24.com",
+    "slist.kr",
+    "meconomynews.com",
+    "cmn.co.kr",
+    "vogue.co.th",
+}
+
 SKIP_DOMAINS = {
     "blog.naver.com",
     "powderroom.co.kr",
@@ -50,10 +69,13 @@ def _domain_key(url: str) -> str:
 
 
 def _classify(url: str, domain: str) -> str:
-    """Determine scraper_class based on known RSS feeds or default to google_news."""
+    """Determine scraper_class based on known RSS feeds, html_crawl, or google_news."""
     for rss_domain in RSS_FEEDS:
         if rss_domain in domain:
             return "rss"
+    for crawl_domain in HTMLCRAWL_DOMAINS:
+        if crawl_domain in domain:
+            return "html_crawl"
     return "google_news"
 
 
@@ -83,6 +105,35 @@ def fix_rss_sources(session: Session | None = None) -> dict:
 
     if fixed:
         print(f"[fix_rss] Reclassified {fixed} sources to RSS", flush=True)
+    return {"fixed": fixed}
+
+
+def fix_htmlcrawl_sources(session: Session | None = None) -> dict:
+    """Re-classify sources in HTMLCRAWL_DOMAINS from google_news to html_crawl."""
+    own_session = session is None
+    session = session or SessionLocal()
+    fixed = 0
+
+    for domain in HTMLCRAWL_DOMAINS:
+        sources = session.execute(
+            select(Source).where(
+                Source.name.contains(domain),
+                Source.scraper_class != "html_crawl",
+                Source.scraper_class != "rss",
+            )
+        ).scalars().all()
+
+        for src in sources:
+            src.scraper_class = "html_crawl"
+            src.enabled = True
+            fixed += 1
+
+    session.commit()
+    if own_session:
+        session.close()
+
+    if fixed:
+        print(f"[fix_html] Reclassified {fixed} sources to html_crawl", flush=True)
     return {"fixed": fixed}
 
 

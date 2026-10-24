@@ -14,7 +14,8 @@ import time
 from datetime import date, timedelta
 
 from newspulse.feeds.historical_run import run_history
-from newspulse.feeds.load_sources import fix_rss_sources
+from newspulse.feeds.html_fetcher import fetch_html_sources
+from newspulse.feeds.load_sources import fix_htmlcrawl_sources, fix_rss_sources
 from newspulse.feeds.rss_fetcher import fetch_rss_sources
 from newspulse.feeds.site_search_fetcher import fetch_site_search_sources
 from newspulse.publish.platform import (
@@ -33,7 +34,7 @@ def daily_update() -> dict:
     yesterday = today - timedelta(days=1)
     print(f"[daily] Starting update: {yesterday} -> {today}", flush=True)
 
-    # --- Step 0: Ensure sources with known RSS feeds are correctly classified ---
+    # --- Step 0: Ensure sources with known RSS/html_crawl feeds are correctly classified ---
     try:
         rss_fix = fix_rss_sources()
         if rss_fix["fixed"]:
@@ -41,8 +42,15 @@ def daily_update() -> dict:
     except Exception as e:
         print(f"[daily] WARNING: RSS source fix failed: {e}", flush=True)
 
+    try:
+        html_fix = fix_htmlcrawl_sources()
+        if html_fix["fixed"]:
+            results["html_fix"] = html_fix
+    except Exception as e:
+        print(f"[daily] WARNING: html_crawl source fix failed: {e}", flush=True)
+
     # --- Source 1: Google News broad queries (existing 6-market queries) ---
-    print("[daily] Step 1/6: Pulling articles from Google News...", flush=True)
+    print("[daily] Step 1/7: Pulling articles from Google News...", flush=True)
     try:
         history = run_history(weeks=1, limit=20, rebuild=True, offset=0)
         results["ingest"] = history["totals"]
@@ -56,7 +64,7 @@ def daily_update() -> dict:
         results["error"] = str(e)
 
     # --- Source 2: RSS feeds (Class A) ---
-    print("[daily] Step 2/6: Fetching RSS feeds...", flush=True)
+    print("[daily] Step 2/7: Fetching RSS feeds...", flush=True)
     try:
         rss = fetch_rss_sources()
         results["rss"] = rss
@@ -67,8 +75,20 @@ def daily_update() -> dict:
         print(f"[daily] ERROR: RSS fetch failed: {e}", flush=True)
         results["rss_error"] = str(e)
 
-    # --- Source 3: Google News site-search (Class D) ---
-    print("[daily] Step 3/6: Running site-specific searches...", flush=True)
+    # --- Source 3: HTML crawl (Class E — no RSS, not on Google News) ---
+    print("[daily] Step 3/7: Crawling HTML article listings...", flush=True)
+    try:
+        html = fetch_html_sources()
+        results["html_crawl"] = html
+        html_ingested = html["totals"].get("ingested", 0)
+        total_ingested += html_ingested
+        print(f"[daily] HTML crawl: {html_ingested} new from {html['sources']} sources", flush=True)
+    except Exception as e:
+        print(f"[daily] ERROR: HTML crawl failed: {e}", flush=True)
+        results["html_crawl_error"] = str(e)
+
+    # --- Source 4: Google News site-search (Class D) ---
+    print("[daily] Step 4/7: Running site-specific searches...", flush=True)
     try:
         site = fetch_site_search_sources()
         results["site_search"] = site
@@ -87,7 +107,7 @@ def daily_update() -> dict:
     since = today - timedelta(days=3)
     print(f"[daily] Publishing only articles since {since} (3-day window)", flush=True)
 
-    print("[daily] Step 4/6: Publishing articles to platform DB...", flush=True)
+    print("[daily] Step 5/7: Publishing articles to platform DB...", flush=True)
     try:
         pub = publish_to_platform(since=since)
         results["publish"] = pub
@@ -96,7 +116,7 @@ def daily_update() -> dict:
         print(f"[daily] ERROR: publish failed: {e}", flush=True)
         results["publish_error"] = str(e)
 
-    print("[daily] Step 5/6: Refreshing signals...", flush=True)
+    print("[daily] Step 6/7: Refreshing signals...", flush=True)
     try:
         sig = refresh_platform_signals(since=since)
         results["signals"] = sig
@@ -105,7 +125,7 @@ def daily_update() -> dict:
         print(f"[daily] ERROR: signals failed: {e}", flush=True)
         results["signals_error"] = str(e)
 
-    print("[daily] Step 6/6: Publishing topic clusters...", flush=True)
+    print("[daily] Step 7/7: Publishing topic clusters...", flush=True)
     try:
         tc = publish_topic_clusters()
         results["topic_clusters"] = tc
