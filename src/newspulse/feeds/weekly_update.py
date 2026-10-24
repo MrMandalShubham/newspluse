@@ -15,7 +15,11 @@ from datetime import date, timedelta
 
 from newspulse.feeds.historical_run import run_history
 from newspulse.feeds.html_fetcher import fetch_html_sources
-from newspulse.feeds.load_sources import fix_htmlcrawl_sources, fix_rss_sources
+from newspulse.feeds.load_sources import (
+    disable_dead_sources,
+    fix_htmlcrawl_sources,
+    fix_rss_sources,
+)
 from newspulse.feeds.rss_fetcher import fetch_rss_sources
 from newspulse.feeds.site_search_fetcher import fetch_site_search_sources
 from newspulse.publish.platform import (
@@ -48,6 +52,13 @@ def daily_update() -> dict:
             results["html_fix"] = html_fix
     except Exception as e:
         print(f"[daily] WARNING: html_crawl source fix failed: {e}", flush=True)
+
+    try:
+        dead_fix = disable_dead_sources()
+        if dead_fix["disabled"]:
+            results["dead_fix"] = dead_fix
+    except Exception as e:
+        print(f"[daily] WARNING: disable dead sources failed: {e}", flush=True)
 
     # --- Source 1: Google News broad queries (existing 6-market queries) ---
     print("[daily] Step 1/7: Pulling articles from Google News...", flush=True)

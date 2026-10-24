@@ -46,6 +46,18 @@ HTMLCRAWL_DOMAINS: set[str] = {
     "meconomynews.com",
     "cmn.co.kr",
     "vogue.co.th",
+    "biteki.com",
+    "kanebo-global.com",
+    "kao.co.jp",
+    "nmpa.gov.cn",
+    "pmda.go.jp",
+}
+
+DISABLED_DOMAINS: set[str] = {
+    "hpcnews.net",
+    "iqingyan.cn",
+    "jumeili.cn",
+    "kevbeauty.cn",
 }
 
 SKIP_DOMAINS = {
@@ -135,6 +147,34 @@ def fix_htmlcrawl_sources(session: Session | None = None) -> dict:
     if fixed:
         print(f"[fix_html] Reclassified {fixed} sources to html_crawl", flush=True)
     return {"fixed": fixed}
+
+
+def disable_dead_sources(session: Session | None = None) -> dict:
+    """Disable sources whose domains are known-dead (DNS fail, 404, permanent timeout)."""
+    own_session = session is None
+    session = session or SessionLocal()
+    disabled = 0
+
+    for domain in DISABLED_DOMAINS:
+        sources = session.execute(
+            select(Source).where(
+                Source.name.contains(domain),
+                Source.enabled.is_(True),
+            )
+        ).scalars().all()
+
+        for src in sources:
+            src.enabled = False
+            src.last_error = "domain dead or permanently unreachable"
+            disabled += 1
+
+    session.commit()
+    if own_session:
+        session.close()
+
+    if disabled:
+        print(f"[disable] Disabled {disabled} dead sources", flush=True)
+    return {"disabled": disabled}
 
 
 def load_sources_from_csv(csv_path: str, session: Session | None = None) -> dict:

@@ -179,7 +179,8 @@ def fetch_html_sources(
     summarizer = MistralSummarizer()
     embedder = MistralEmbedder()
     client = httpx.Client(
-        timeout=30, follow_redirects=True, headers={"User-Agent": _UA},
+        timeout=30, follow_redirects=True, verify=False,
+        headers={"User-Agent": _UA},
     )
 
     sources = session.execute(
