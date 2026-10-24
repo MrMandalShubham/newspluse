@@ -190,7 +190,7 @@ def _lookup_id(conn, table, name):
 
 def _resolve_story_id(conn, headline: str, published_at, fallback_id: str | None) -> str | None:
     """Find an existing story_id with a similar headline within 48h, or use the fallback."""
-    if not headline:
+    if not headline or published_at is None:
         return fallback_id
     row = conn.execute(
         text(
