@@ -16,7 +16,10 @@ from newspulse.mistral import chat_json
 
 MAX_BODY_CHARS = 8000
 
-CATEGORIES = {"brand", "market", "regulatory", "ingredient", "retail", "consumer"}
+CATEGORIES = {
+    "brand", "market", "regulatory", "ingredient",
+    "retail", "consumer", "lifestyle", "fragrance",
+}
 SENTIMENTS = {"positive", "neutral", "negative"}
 # Event-type taxonomy the client asked for (news "what happened"), multi-value.
 EVENT_TYPES = {
@@ -28,35 +31,52 @@ _EVENT_LOOKUP = {e.lower(): e for e in EVENT_TYPES}
 SYSTEM_PROMPT = (
     "You are a classifier and analyst for an Asia-focused beauty industry intelligence "
     "platform.\n\n"
-    "FIRST QUESTION: Is this article relevant to the beauty, cosmetics, skincare, "
-    "personal care, haircare, fragrance/perfume, or related industry?\n"
-    "This includes: product launches, brand news, M&A/acquisitions, ingredient trends, "
-    "regulatory changes (cosmetics/MFDS/NMPA), retail expansion, beauty retail (Olive Young, "
-    "Sephora), K-beauty/J-beauty/C-beauty trends, OEM/ODM manufacturers (Cosmax, Kolmar), "
-    "packaging for beauty, beauty-tech, and beauty e-commerce.\n"
-    "This does NOT include: general business/trade news, fashion (unless beauty-related), "
-    "food/beverage, automotive, real estate, pure celebrity gossip, tech/smartphones, "
-    "pharma/medical (unless cosmeceutical), or general lifestyle.\n\n"
+    "FIRST QUESTION: Is this article relevant to beauty, cosmetics, skincare, self-care, "
+    "personal care, haircare, fragrance/perfume, body care, wellness, spa, nail care, "
+    "makeup, or the broader beauty lifestyle?\n"
+    "CLASSIFY AS TRUE (is_product_related) if the article covers ANY of these:\n"
+    "- Product launches, reviews, recommendations, or beauty tips/tutorials\n"
+    "- Brand news, company earnings, or business moves by beauty/cosmetics companies\n"
+    "- M&A/acquisitions involving beauty or personal care companies\n"
+    "- Ingredient trends, formulation science, or cosmetic chemistry\n"
+    "- Regulatory changes (cosmetics/MFDS/NMPA/PMDA)\n"
+    "- Retail expansion or beauty retail (Olive Young, Sephora, @cosme)\n"
+    "- K-beauty, J-beauty, C-beauty trends, or regional beauty culture\n"
+    "- OEM/ODM manufacturers (Cosmax, Kolmar, Intercos)\n"
+    "- Packaging, beauty-tech, beauty e-commerce, or DTC beauty brands\n"
+    "- Self-care routines, wellness trends connected to beauty\n"
+    "- Fragrance/perfume industry news, scent trends, aromatherapy\n"
+    "- Celebrity or influencer beauty collaborations, beauty content creators\n"
+    "- Dermatology or aesthetic treatments (non-surgical: Botox, fillers, lasers)\n"
+    "- Sustainability, clean beauty, or eco-packaging in cosmetics\n"
+    "- Beauty awards, rankings, or consumer surveys about beauty products\n"
+    "When in doubt, lean toward TRUE — we prefer to include borderline beauty content "
+    "rather than miss it.\n\n"
+    "CLASSIFY AS FALSE only if the article is clearly unrelated:\n"
+    "- Pure politics, real estate, automotive, food/beverage (no beauty angle)\n"
+    "- Tech/smartphones, general trade/shipping, sports\n"
+    "- Pure celebrity gossip with zero beauty/product connection\n"
+    "- Pharma/medical treatments for diseases (NOT cosmeceutical or aesthetic)\n\n"
     "CLASSIFICATION EXAMPLES:\n"
-    'Title: "L\'Oreal Reports Q3 Earnings Beat" -> is_product_related: true\n'
-    'Title: "Shiseido Launches New Anti-Aging Serum in Japan" -> is_product_related: true\n'
-    'Title: "MFDS Updates Sunscreen Filter Regulations" -> is_product_related: true\n'
-    'Title: "Amorepacific Acquires Stake in K-Beauty Startup" -> is_product_related: true\n'
-    'Title: "PDRN Emerges as Viral Anti-Aging Ingredient" -> is_product_related: true\n'
-    'Title: "Cosmax Opens New Manufacturing Facility in Thailand" -> is_product_related: true\n'
-    'Title: "Beauty Retailer Olive Young Expands to U.S." -> is_product_related: true\n'
-    'Title: "Celebrity Launches New Skincare Line" -> is_product_related: true\n'
-    'Title: "Shipping Container Prices Rise 12% in Q3" -> is_product_related: false\n'
-    'Title: "Real Estate Prices in Seoul Decline" -> is_product_related: false\n'
-    'Title: "General Trade News: Japan Exports Up 3%" -> is_product_related: false\n'
-    'Title: "Fashion Week Highlights: Street Style Trends" -> is_product_related: false\n'
-    'Title: "Celebrity Divorce Announcement" -> is_product_related: false\n'
-    'Title: "Automotive Industry Reports Strong Sales" -> is_product_related: false\n'
-    'Title: "Tech Company Launches New Smartphone" -> is_product_related: false\n'
-    'Title: "Hospital Reports New Cancer Treatment" -> is_product_related: false\n\n'
+    'Title: "L\'Oreal Reports Q3 Earnings Beat" -> true\n'
+    'Title: "Shiseido Launches New Anti-Aging Serum in Japan" -> true\n'
+    'Title: "MFDS Updates Sunscreen Filter Regulations" -> true\n'
+    'Title: "Amorepacific Acquires Stake in K-Beauty Startup" -> true\n'
+    'Title: "PDRN Emerges as Viral Anti-Aging Ingredient" -> true\n'
+    'Title: "10 Best Moisturizers for Dry Winter Skin" -> true\n'
+    'Title: "The Rise of Quiet Luxury in Fragrance" -> true\n'
+    'Title: "How to Build a Self-Care Routine" -> true\n'
+    'Title: "Japanese Beauty Trends to Watch in 2026" -> true\n'
+    'Title: "Vogue Picks: Best New Perfumes This Month" -> true\n'
+    'Title: "Shipping Container Prices Rise 12% in Q3" -> false\n'
+    'Title: "Real Estate Prices in Seoul Decline" -> false\n'
+    'Title: "Celebrity Divorce Announcement" -> false\n'
+    'Title: "Tech Company Launches New Smartphone" -> false\n'
+    'Title: "Hospital Reports New Cancer Treatment" -> false\n\n'
     "After classifying, extract structured fields. Return ONLY JSON:\n"
     '{"is_product_related": true/false, '
-    '"category": one of ["brand","market","regulatory","ingredient","retail","consumer"], '
+    '"category": one of ["brand","market","regulatory","ingredient",'
+    '"retail","consumer","lifestyle","fragrance"], '
     '"sentiment": one of ["positive","neutral","negative"], '
     '"theme": a short topic tag (e.g. "barrier repair", "clean fragrance"), '
     '"event_types": a list of one or more of '
