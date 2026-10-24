@@ -17,6 +17,16 @@ RSS_FEEDS: dict[str, str] = {
     "cosmeticsbusiness.com": "https://www.cosmeticsbusiness.com/rss",
     "globalcosmeticsnews.com": "https://www.globalcosmeticsnews.com/feed",
     "wwdjapan.com": "https://www.wwdjapan.com/feed",
+    "kokusaishogyo.co.jp": "https://kokusaishogyo.co.jp/rss/news/",
+    "kokusaishogyo-online.jp": "https://kokusaishogyo-online.jp/feed",
+    "hankyung.com": "https://www.hankyung.com/feed/all-news",
+    "andpremium.jp": "https://andpremium.jp/feed/",
+    "prtimes.jp": "https://prtimes.jp/index.rdf",
+    "glowonline.jp": "https://glowonline.jp/?feed=all",
+    "beautynury.com": "https://www.beautynury.com/rss",
+    "jangup.com": "https://www.jangup.com/rss/allArticle.xml",
+    "vogue.co.jp": "https://www.vogue.co.jp/feed/rss",
+    "fashionsnap.com": "https://www.fashionsnap.com/rss.xml",
 }
 
 SKIP_DOMAINS = {
@@ -45,6 +55,35 @@ def _classify(url: str, domain: str) -> str:
         if rss_domain in domain:
             return "rss"
     return "google_news"
+
+
+def fix_rss_sources(session: Session | None = None) -> dict:
+    """Re-classify sources that have known RSS feeds but are set to google_news."""
+    own_session = session is None
+    session = session or SessionLocal()
+    fixed = 0
+
+    for domain, feed_url in RSS_FEEDS.items():
+        sources = session.execute(
+            select(Source).where(
+                Source.name.contains(domain),
+                Source.scraper_class != "rss",
+            )
+        ).scalars().all()
+
+        for src in sources:
+            src.scraper_class = "rss"
+            src.feed_url = feed_url
+            src.enabled = True
+            fixed += 1
+
+    session.commit()
+    if own_session:
+        session.close()
+
+    if fixed:
+        print(f"[fix_rss] Reclassified {fixed} sources to RSS", flush=True)
+    return {"fixed": fixed}
 
 
 def load_sources_from_csv(csv_path: str, session: Session | None = None) -> dict:

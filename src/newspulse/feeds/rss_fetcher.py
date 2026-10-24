@@ -25,6 +25,8 @@ from newspulse.sources.extraction import extract_image
 from newspulse.storage import get_storage
 
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
+RSS10_NS = "{http://purl.org/rss/1.0/}"
+DC_NS = "{http://purl.org/dc/elements/1.1/}"
 _UA = "Mozilla/5.0 (compatible; NewsPulseBot/1.0)"
 
 
@@ -42,7 +44,7 @@ def _parse_date(value: str | None) -> datetime | None:
 
 
 def _parse_feed(xml_text: str) -> list[dict]:
-    """Parse RSS 2.0 or Atom feed XML into a list of article dicts."""
+    """Parse RSS 2.0, Atom, or RDF/RSS 1.0 feed XML into a list of article dicts."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
@@ -79,6 +81,21 @@ def _parse_feed(xml_text: str) -> list[dict]:
                     entry.findtext(f"{ATOM_NS}published")
                     or entry.findtext(f"{ATOM_NS}updated")
                 ),
+            })
+
+    # RDF / RSS 1.0: <rdf:RDF><item xmlns="http://purl.org/rss/1.0/">
+    if not items:
+        for item in root.findall(f".//{RSS10_NS}item"):
+            link = (item.findtext(f"{RSS10_NS}link") or "").strip()
+            if not link:
+                continue
+            items.append({
+                "url": link,
+                "title": (item.findtext(f"{RSS10_NS}title") or "").strip(),
+                "description": (
+                    item.findtext(f"{RSS10_NS}description") or ""
+                ).strip(),
+                "published_at": _parse_date(item.findtext(f"{DC_NS}date")),
             })
 
     return items

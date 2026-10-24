@@ -14,6 +14,7 @@ import time
 from datetime import date, timedelta
 
 from newspulse.feeds.historical_run import run_history
+from newspulse.feeds.load_sources import fix_rss_sources
 from newspulse.feeds.rss_fetcher import fetch_rss_sources
 from newspulse.feeds.site_search_fetcher import fetch_site_search_sources
 from newspulse.publish.platform import (
@@ -31,6 +32,14 @@ def daily_update() -> dict:
     today = date.today()
     yesterday = today - timedelta(days=1)
     print(f"[daily] Starting update: {yesterday} -> {today}", flush=True)
+
+    # --- Step 0: Ensure sources with known RSS feeds are correctly classified ---
+    try:
+        rss_fix = fix_rss_sources()
+        if rss_fix["fixed"]:
+            results["rss_fix"] = rss_fix
+    except Exception as e:
+        print(f"[daily] WARNING: RSS source fix failed: {e}", flush=True)
 
     # --- Source 1: Google News broad queries (existing 6-market queries) ---
     print("[daily] Step 1/6: Pulling articles from Google News...", flush=True)
