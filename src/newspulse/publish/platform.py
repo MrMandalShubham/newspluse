@@ -298,7 +298,8 @@ def _collect_rows(since: date | None = None) -> list[dict]:
                 "category": ar.category, "sentiment": ar.sentiment, "theme": ar.theme,
                 "event_types": ar.event_types,
                 "importance_score": _hybrid_importance(ar.importance_score, size),
-                "published_at": ri.published_at, "signal_tier": _signal_tier(size),
+                "published_at": ri.published_at or ar.created_at,
+                "signal_tier": _signal_tier(size),
                 "topic_velocity": float(size), "brands": ar.brands, "companies": ar.companies,
                 "ingredients": ar.ingredients, "products": ar.products,
                 "story_id": story_id,
@@ -350,7 +351,7 @@ def _ensure_entity_slugs(conn) -> dict:
 
 
 def _finalize(conn) -> dict:
-    """Idempotent post-publish: backfill missing slugs + (re)create brand-count view."""
+    """Idempotent post-publish: backfill missing slugs/dates + (re)create brand-count view."""
     rows = conn.execute(
         text("select id, headline from news_pulse_articles where slug is null")
     ).all()
@@ -359,9 +360,20 @@ def _finalize(conn) -> dict:
             text("update news_pulse_articles set slug=:s where id=:id"),
             {"s": article_slug(r.headline, r.id), "id": r.id},
         )
+    dates_fixed = conn.execute(
+        text(
+            "update news_pulse_articles "
+            "set published_at = created_at "
+            "where published_at is null"
+        )
+    ).rowcount
     entity = _ensure_entity_slugs(conn)
     conn.execute(text(_BRAND_COUNT_VIEW))
-    return {"article_slugs_backfilled": len(rows), **entity}
+    return {
+        "article_slugs_backfilled": len(rows),
+        "dates_backfilled": dates_fixed,
+        **entity,
+    }
 
 
 def finalize_platform() -> dict:
