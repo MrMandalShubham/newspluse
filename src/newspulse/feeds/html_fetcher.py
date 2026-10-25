@@ -10,6 +10,7 @@ Works for sites that have no RSS feed and are not indexed by Google News.
 """
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
@@ -20,8 +21,9 @@ import trafilatura
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from newspulse.collectors.base import content_hash
 from newspulse.db import SessionLocal
-from newspulse.feeds.service import batch_ingest
+from newspulse.feeds.service import batch_ingest, known_urls
 from newspulse.models import Source
 from newspulse.reports.embedder import MistralEmbedder
 from newspulse.reports.summarizer import MistralSummarizer
@@ -29,6 +31,7 @@ from newspulse.sources.extraction import extract_image
 from newspulse.storage import get_storage
 
 _UA = "Mozilla/5.0 (compatible; NewsPulseBot/1.0)"
+_FETCH_WORKERS = 10
 SITEMAP_NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
 _NAV_PATTERNS = re.compile(
     r"/(tag|category|author|page|login|signup|register|search|contact|about|privacy|terms"
@@ -193,45 +196,27 @@ def fetch_html_sources(
     totals: dict[str, int] = {}
     source_results: list[dict] = []
 
-    # Phase 1 — collect payloads from all HTML sources (fast HTTP, no LLM)
-    all_payloads: list[dict] = []
+    # Pre-load known URL hashes for fast dedup
+    existing_hashes = known_urls(session)
+
+    # Phase 1a — collect article URLs from all sources, pre-dedup
+    url_src_pairs: list[tuple[str, Source]] = []
     for src in sources:
-        src_count = 0
+        new_count = 0
         try:
             article_urls = _get_article_urls(src, client, limit=limit_per_source)
-
             for url in article_urls:
-                try:
-                    html = None
-                    try:
-                        page_resp = client.get(url)
-                        if page_resp.status_code == 200:
-                            html = page_resp.text
-                    except Exception:
-                        pass
-
-                    if not html:
-                        totals["fetch_fail"] = totals.get("fetch_fail", 0) + 1
-                        continue
-
-                    all_payloads.append({
-                        "url": url,
-                        "title": None,
-                        "content": trafilatura.extract(html),
-                        "image_url": extract_image(html),
-                        "source_name": src.name,
-                        "published_at": None,
-                        "region": src.region,
-                    })
-                    src_count += 1
-                except Exception:
-                    totals["fetch_error"] = totals.get("fetch_error", 0) + 1
+                if content_hash(url) in existing_hashes:
+                    totals["pre_dedup"] = totals.get("pre_dedup", 0) + 1
+                    continue
+                url_src_pairs.append((url, src))
+                new_count += 1
 
             src.last_success_at = datetime.now().astimezone()
             src.last_error = None
             session.commit()
             print(
-                f"[html_crawl] {src.name}: {len(article_urls)} links, {src_count} fetched",
+                f"[html_crawl] {src.name}: {new_count} new / {len(article_urls)} links",
                 flush=True,
             )
         except Exception as e:
@@ -243,16 +228,53 @@ def fetch_html_sources(
             totals["crawl_error"] = totals.get("crawl_error", 0) + 1
             print(f"[html_crawl] {src.name}: ERROR - {e}", flush=True)
 
-        source_results.append({"source": src.name, "fetched": src_count})
+        source_results.append({"source": src.name, "new": new_count})
 
-    # Phase 2+3 — concurrent LLM classification + sequential DB writes
-    print(f"[html_crawl] Classifying {len(all_payloads)} articles (8 concurrent)...", flush=True)
-    batch_counts = batch_ingest(
-        all_payloads, session=session, storage=storage,
-        summarizer=summarizer, embedder=embedder,
-    )
-    for k, v in batch_counts.items():
-        totals[k] = totals.get(k, 0) + v
+    # Phase 1b — concurrent page fetching
+    all_payloads: list[dict] = []
+    if url_src_pairs:
+        print(
+            f"[html_crawl] Fetching {len(url_src_pairs)} pages ({_FETCH_WORKERS} concurrent)...",
+            flush=True,
+        )
+
+        def _fetch(pair: tuple[str, Source]) -> tuple[str, Source, str | None]:
+            url, src = pair
+            try:
+                resp = client.get(url)
+                if resp.status_code == 200:
+                    return url, src, resp.text
+            except Exception:
+                pass
+            return url, src, None
+
+        with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
+            for url, src, html in pool.map(_fetch, url_src_pairs):
+                if not html:
+                    totals["fetch_fail"] = totals.get("fetch_fail", 0) + 1
+                    continue
+                all_payloads.append({
+                    "url": url,
+                    "title": None,
+                    "content": trafilatura.extract(html),
+                    "image_url": extract_image(html),
+                    "source_name": src.name,
+                    "published_at": None,
+                    "region": src.region,
+                })
+
+    # Phase 2+3+4 — concurrent LLM + sequential DB + batch embeddings
+    if all_payloads:
+        print(
+            f"[html_crawl] Classifying {len(all_payloads)} articles (8 concurrent)...",
+            flush=True,
+        )
+        batch_counts = batch_ingest(
+            all_payloads, session=session, storage=storage,
+            summarizer=summarizer, embedder=embedder,
+        )
+        for k, v in batch_counts.items():
+            totals[k] = totals.get(k, 0) + v
 
     client.close()
     if own_session:

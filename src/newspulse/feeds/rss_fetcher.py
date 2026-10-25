@@ -7,8 +7,11 @@ and feeds them into the standard ingestion pipeline.
     results = fetch_rss_sources(session)
 """
 
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import httpx
@@ -16,8 +19,9 @@ import trafilatura
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from newspulse.collectors.base import content_hash
 from newspulse.db import SessionLocal
-from newspulse.feeds.service import batch_ingest
+from newspulse.feeds.service import batch_ingest, known_urls
 from newspulse.models import Source
 from newspulse.reports.embedder import MistralEmbedder
 from newspulse.reports.summarizer import MistralSummarizer
@@ -28,6 +32,8 @@ ATOM_NS = "{http://www.w3.org/2005/Atom}"
 RSS10_NS = "{http://purl.org/rss/1.0/}"
 DC_NS = "{http://purl.org/dc/elements/1.1/}"
 _UA = "Mozilla/5.0 (compatible; NewsPulseBot/1.0)"
+_ETAG_CACHE = Path.home() / ".newspulse_etags.json"
+_FETCH_WORKERS = 10
 
 
 def _parse_date(value: str | None) -> datetime | None:
@@ -101,18 +107,67 @@ def _parse_feed(xml_text: str) -> list[dict]:
     return items
 
 
-def fetch_rss(feed_url: str, client: httpx.Client | None = None) -> list[dict]:
-    """Fetch and parse a single RSS/Atom feed URL."""
-    _client = client or httpx.Client(timeout=30, follow_redirects=True, headers={"User-Agent": _UA})
+def _load_etags() -> dict[str, str]:
     try:
-        resp = _client.get(feed_url)
-        resp.raise_for_status()
-        return _parse_feed(resp.text)
+        return json.loads(_ETAG_CACHE.read_text())
     except Exception:
-        return []
+        return {}
+
+
+def _save_etags(etags: dict[str, str]) -> None:
+    try:
+        _ETAG_CACHE.write_text(json.dumps(etags))
+    except Exception:
+        pass
+
+
+def fetch_rss(
+    feed_url: str,
+    client: httpx.Client | None = None,
+    etags: dict[str, str] | None = None,
+) -> tuple[list[dict], bool]:
+    """Fetch and parse a single RSS/Atom feed URL.
+
+    Returns (items, changed). When the server returns 304 Not Modified,
+    items is empty and changed is False — the feed hasn't updated.
+    """
+    _client = client or httpx.Client(
+        timeout=30, follow_redirects=True, headers={"User-Agent": _UA},
+    )
+    try:
+        headers: dict[str, str] = {}
+        if etags and feed_url in etags:
+            headers["If-None-Match"] = etags[feed_url]
+
+        resp = _client.get(feed_url, headers=headers)
+
+        if resp.status_code == 304:
+            return [], False
+
+        resp.raise_for_status()
+
+        if etags is not None:
+            etag = resp.headers.get("etag")
+            if etag:
+                etags[feed_url] = etag
+
+        return _parse_feed(resp.text), True
+    except Exception:
+        return [], True
     finally:
         if client is None:
             _client.close()
+
+
+def _fetch_page(url: str, client: httpx.Client) -> tuple[str, str | None]:
+    """Fetch a single article page. Returns (url, html_or_none)."""
+    try:
+        resp = client.get(url)
+        if resp.status_code == 200:
+            return url, resp.text
+    except Exception:
+        pass
+    return url, None
 
 
 def fetch_rss_sources(session: Session | None = None) -> dict:
@@ -135,23 +190,60 @@ def fetch_rss_sources(session: Session | None = None) -> dict:
     totals: dict[str, int] = {}
     source_results: list[dict] = []
 
-    # Phase 1 — collect payloads from all RSS feeds (fast HTTP, no LLM)
-    all_payloads: list[dict] = []
-    for src in sources:
-        src_count = 0
-        try:
-            feed_items = fetch_rss(src.feed_url, client=client)
-            for item in feed_items:
-                try:
-                    url = item["url"]
-                    html = None
-                    try:
-                        page_resp = client.get(url)
-                        if page_resp.status_code == 200:
-                            html = page_resp.text
-                    except Exception:
-                        pass
+    # Load ETag cache for conditional requests
+    etags = _load_etags()
 
+    # Pre-load known URL hashes for fast dedup before fetching pages
+    existing_hashes = known_urls(session)
+
+    # Phase 1a — collect article URLs from all feeds
+    url_items: list[tuple[str, dict, Source]] = []
+    for src in sources:
+        try:
+            feed_items, changed = fetch_rss(src.feed_url, client=client, etags=etags)
+            if not changed:
+                totals["feeds_unchanged"] = totals.get("feeds_unchanged", 0) + 1
+                source_results.append({"source": src.name, "items": 0, "cached": True})
+                print(f"[rss] {src.name}: unchanged (ETag)", flush=True)
+                continue
+
+            new_count = 0
+            for item in feed_items:
+                url = item["url"]
+                if content_hash(url) in existing_hashes:
+                    totals["pre_dedup"] = totals.get("pre_dedup", 0) + 1
+                    continue
+                url_items.append((url, item, src))
+                new_count += 1
+
+            src.last_success_at = datetime.now().astimezone()
+            src.last_error = None
+            session.commit()
+            source_results.append({"source": src.name, "items": new_count})
+            print(f"[rss] {src.name}: {new_count} new / {len(feed_items)} total", flush=True)
+        except Exception as e:
+            src.last_error = str(e)
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
+            totals["feed_error"] = totals.get("feed_error", 0) + 1
+
+    _save_etags(etags)
+
+    # Phase 1b — concurrent HTTP page fetching (skip already-known URLs)
+    all_payloads: list[dict] = []
+    if url_items:
+        print(f"[rss] Fetching {len(url_items)} pages ({_FETCH_WORKERS} concurrent)...", flush=True)
+        with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool:
+            fetch_futures = {
+                pool.submit(_fetch_page, url, client): (url, item, src)
+                for url, item, src in url_items
+            }
+            for future in as_completed(fetch_futures):
+                url, item, src = fetch_futures[future]
+                try:
+                    _, html = future.result()
                     all_payloads.append({
                         "url": url,
                         "title": item.get("title"),
@@ -165,32 +257,18 @@ def fetch_rss_sources(session: Session | None = None) -> dict:
                         ),
                         "region": src.region,
                     })
-                    src_count += 1
                 except Exception:
                     totals["fetch_error"] = totals.get("fetch_error", 0) + 1
 
-            src.last_success_at = datetime.now().astimezone()
-            src.last_error = None
-            session.commit()
-        except Exception as e:
-            src.last_error = str(e)
-            try:
-                session.commit()
-            except Exception:
-                session.rollback()
-            totals["feed_error"] = totals.get("feed_error", 0) + 1
-
-        source_results.append({"source": src.name, "items": src_count})
-        print(f"[rss] {src.name}: collected {src_count} items", flush=True)
-
-    # Phase 2+3 — concurrent LLM classification + sequential DB writes
-    print(f"[rss] Classifying {len(all_payloads)} articles (8 concurrent)...", flush=True)
-    batch_counts = batch_ingest(
-        all_payloads, session=session, storage=storage,
-        summarizer=summarizer, embedder=embedder,
-    )
-    for k, v in batch_counts.items():
-        totals[k] = totals.get(k, 0) + v
+    # Phase 2+3+4 — concurrent LLM + sequential DB + batch embeddings
+    if all_payloads:
+        print(f"[rss] Classifying {len(all_payloads)} articles (8 concurrent)...", flush=True)
+        batch_counts = batch_ingest(
+            all_payloads, session=session, storage=storage,
+            summarizer=summarizer, embedder=embedder,
+        )
+        for k, v in batch_counts.items():
+            totals[k] = totals.get(k, 0) + v
 
     client.close()
     if own_session:

@@ -14,9 +14,10 @@ import trafilatura
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from newspulse.collectors.base import content_hash
 from newspulse.db import SessionLocal
 from newspulse.feeds.googlenews import GoogleNewsClient, GoogleNewsResolver
-from newspulse.feeds.service import batch_ingest
+from newspulse.feeds.service import batch_ingest, known_urls
 from newspulse.models import Source
 from newspulse.reports.embedder import MistralEmbedder
 from newspulse.reports.summarizer import MistralSummarizer
@@ -49,7 +50,10 @@ def fetch_site_search_sources(
     totals: dict[str, int] = {}
     source_results: list[dict] = []
 
-    # Phase 1 — collect payloads from all site-search sources (fast HTTP, no LLM)
+    # Pre-load known URL hashes for fast dedup before resolving
+    existing_hashes = known_urls(session)
+
+    # Phase 1 — collect payloads, skip already-known URLs before resolving
     all_payloads: list[dict] = []
     for src in sources:
         src_count = 0
@@ -67,6 +71,10 @@ def fetch_site_search_sources(
                     final_url, html = resolver.resolve(item["gnews_url"])
                     if not html:
                         totals["unresolved"] = totals.get("unresolved", 0) + 1
+                        continue
+
+                    if content_hash(final_url) in existing_hashes:
+                        totals["pre_dedup"] = totals.get("pre_dedup", 0) + 1
                         continue
 
                     all_payloads.append({
@@ -89,7 +97,7 @@ def fetch_site_search_sources(
             src.last_error = None
             session.commit()
             print(
-                f"[site-search] {src.name}: {len(items)} found, {src_count} resolved",
+                f"[site-search] {src.name}: {len(items)} found, {src_count} new",
                 flush=True,
             )
         except Exception as e:
@@ -101,7 +109,7 @@ def fetch_site_search_sources(
             totals["feed_error"] = totals.get("feed_error", 0) + 1
             print(f"[site-search] {src.name}: ERROR - {e}", flush=True)
 
-        source_results.append({"source": src.name, "resolved": src_count})
+        source_results.append({"source": src.name, "new": src_count})
 
     # Phase 2+3 — concurrent LLM classification + sequential DB writes
     print(

@@ -8,6 +8,8 @@ we don't reprocess them. Reuses the existing summarizer/embedder/storage.
 """
 
 import json
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urlparse
@@ -29,6 +31,27 @@ from newspulse.sources.extraction import extract_image
 from newspulse.storage import ObjectStorage
 
 MAX_WORKERS = 8
+EMBED_BATCH_SIZE = 16
+
+
+class _RateLimiter:
+    """Token-bucket rate limiter for Mistral API (thread-safe)."""
+
+    def __init__(self, calls_per_second: float = 5.0) -> None:
+        self._interval = 1.0 / calls_per_second
+        self._lock = threading.Lock()
+        self._last = 0.0
+
+    def acquire(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            wait = self._last + self._interval - now
+            if wait > 0:
+                time.sleep(wait)
+            self._last = time.monotonic()
+
+
+_rate_limiter = _RateLimiter(calls_per_second=5.0)
 
 
 class ArticleFetcher(BaseCollector):
@@ -156,8 +179,15 @@ def _classify_one(
     if not text:
         return payload, None
     payload = {**payload, "_title": title, "_image": image, "_text": text}
+    _rate_limiter.acquire()
     result = summarizer.summarize(title, text, [])
     return payload, result
+
+
+def known_urls(session: Session) -> set[str]:
+    """Return the set of URL content-hashes already in the DB (for pre-dedup)."""
+    rows = session.execute(select(RawItem.content_hash)).all()
+    return {r[0] for r in rows}
 
 
 def batch_ingest(
@@ -174,11 +204,12 @@ def batch_ingest(
 
     Phase 1: dedup by URL (fast, sequential DB check).
     Phase 2: classify concurrently via thread pool (no DB).
-    Phase 3: store results sequentially (DB writes).
+    Phase 3: store results sequentially (DB writes) + batch embeddings.
     """
     counts: dict[str, int] = {}
 
-    # Phase 1 — dedup
+    # Phase 1 — dedup (load all known hashes once, not per-URL)
+    existing = known_urls(session)
     new_payloads: list[dict] = []
     for p in payloads:
         url = p.get("url")
@@ -186,15 +217,21 @@ def batch_ingest(
             counts["no_url"] = counts.get("no_url", 0) + 1
             continue
         digest = content_hash(url)
-        if session.execute(select(RawItem.id).where(RawItem.content_hash == digest)).first():
+        if digest in existing:
             counts["duplicate"] = counts.get("duplicate", 0) + 1
             continue
+        existing.add(digest)
         new_payloads.append(p)
 
     if not new_payloads:
         return counts
 
-    # Phase 2 — concurrent LLM classification
+    print(
+        f"  [batch] {len(new_payloads)} new / {counts.get('duplicate', 0)} dup",
+        flush=True,
+    )
+
+    # Phase 2 — concurrent LLM classification (rate-limited)
     classified: list[tuple[dict, ArticleSummary | None]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
@@ -209,6 +246,7 @@ def batch_ingest(
                 counts["error"] = counts.get("error", 0) + 1
 
     # Phase 3 — sequential DB writes
+    embed_queue: list[tuple[ArticleReport, str]] = []
     for payload, result in classified:
         url = payload["url"]
         if result is None:
@@ -262,12 +300,12 @@ def batch_ingest(
                 products=result.products,
                 model=settings.mistral_model,
             )
-            if result.is_product_related and embedder is not None:
-                report.embedding = embedder.embed(
-                    [result.summary or result.label or title or ""]
-                )[0]
             session.add(report)
-            session.commit()
+            session.flush()
+
+            if result.is_product_related and embedder is not None:
+                embed_text = result.summary or result.label or title or ""
+                embed_queue.append((report, embed_text))
 
             status = "ingested" if result.is_product_related else "skipped_not_product"
             counts[status] = counts.get(status, 0) + 1
@@ -278,6 +316,19 @@ def batch_ingest(
             except Exception:
                 pass
 
+    # Phase 4 — batch embeddings (16 at a time instead of 1-by-1)
+    if embed_queue and embedder is not None:
+        for i in range(0, len(embed_queue), EMBED_BATCH_SIZE):
+            batch = embed_queue[i:i + EMBED_BATCH_SIZE]
+            texts = [text for _, text in batch]
+            try:
+                vectors = embedder.embed(texts)
+                for (report, _), vec in zip(batch, vectors, strict=True):
+                    report.embedding = vec
+            except Exception:
+                pass
+
+    session.commit()
     return counts
 
 
