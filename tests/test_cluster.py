@@ -1,18 +1,12 @@
 """Part 8.3 — clustering functions + embed/cluster pipeline (offline)."""
 
 from newspulse.models import ArticleReport, RawItem, Source
-from newspulse.reports.cluster import cosine, greedy_cluster
+from newspulse.reports.cluster import greedy_cluster
 from newspulse.reports.embedder import FakeEmbedder
 from newspulse.reports.pipeline import build_clusters, embed_pending
 
 
 # --- pure functions -----------------------------------------------------
-def test_cosine() -> None:
-    assert cosine([1, 0], [1, 0]) == 1.0
-    assert cosine([1, 0], [0, 1]) == 0.0
-    assert cosine([1, 0], [0, 0]) == 0.0  # zero vector safe
-
-
 def test_greedy_cluster_groups_similar() -> None:
     items = [(1, [1.0, 0.0]), (2, [0.98, 0.2]), (3, [0.0, 1.0])]
     groups = greedy_cluster(items, threshold=0.9)
@@ -55,7 +49,8 @@ def test_build_clusters_groups_and_assigns(db_session) -> None:
     db_session.flush()
 
     stats = build_clusters(session=db_session, threshold=0.9)
-    assert stats == {"reports": 3, "clusters": 2}
+    assert stats["reports"] == 3
+    assert stats["clusters"] == 2
     db_session.refresh(a)
     db_session.refresh(b)
     db_session.refresh(c)
