@@ -19,6 +19,8 @@ from newspulse.feeds.load_sources import (
     disable_dead_sources,
     fix_htmlcrawl_sources,
     fix_rss_sources,
+    normalize_source_regions,
+    seed_new_sources,
 )
 from newspulse.feeds.rss_fetcher import fetch_rss_sources
 from newspulse.feeds.site_search_fetcher import fetch_site_search_sources
@@ -38,7 +40,14 @@ def daily_update() -> dict:
     yesterday = today - timedelta(days=1)
     print(f"[daily] Starting update: {yesterday} -> {today}", flush=True)
 
-    # --- Step 0: Ensure sources with known RSS/html_crawl feeds are correctly classified ---
+    # --- Step 0: Seed new sources + ensure correct classification ---
+    try:
+        seed = seed_new_sources()
+        if seed["created"]:
+            results["seed"] = seed
+    except Exception as e:
+        print(f"[daily] WARNING: Source seeding failed: {e}", flush=True)
+
     try:
         rss_fix = fix_rss_sources()
         if rss_fix["fixed"]:
@@ -52,6 +61,13 @@ def daily_update() -> dict:
             results["html_fix"] = html_fix
     except Exception as e:
         print(f"[daily] WARNING: html_crawl source fix failed: {e}", flush=True)
+
+    try:
+        region_fix = normalize_source_regions()
+        if region_fix["fixed"]:
+            results["region_fix"] = region_fix
+    except Exception as e:
+        print(f"[daily] WARNING: Region normalization failed: {e}", flush=True)
 
     try:
         dead_fix = disable_dead_sources()

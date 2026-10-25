@@ -65,6 +65,11 @@ MARKET_MAP = {
     "HK": ("Hong Kong", "HK", "🇭🇰"),
     "TH": ("Thailand", "TH", "🇹🇭"),
     "TW": ("Taiwan", "TW", "🇹🇼"),
+    "EU": ("Europe", "EU", "🇪🇺"),
+    "SG": ("Singapore", "SG", "🇸🇬"),
+    "MY": ("Malaysia", "MY", "🇲🇾"),
+    "AU": ("Australia", "AU", "🇦🇺"),
+    "FR": ("France", "FR", "🇫🇷"),
 }
 
 _JUNCTIONS = ("news_article_brands", "news_article_companies",
@@ -72,17 +77,23 @@ _JUNCTIONS = ("news_article_brands", "news_article_companies",
 
 # LLM-extracted country name -> our region code (falls back to source region).
 COUNTRY_TO_REGION = {
-    "south korea": "KR", "korea": "KR", "republic of korea": "KR",
-    "china": "CN", "mainland china": "CN", "prc": "CN",
-    "japan": "JP",
-    "hong kong": "HK", "hong kong sar": "HK",
-    "india": "IN",
-    "indonesia": "ID",
-    "united states": "US", "usa": "US", "u.s.": "US",
+    "south korea": "KR", "korea": "KR", "republic of korea": "KR", "kr": "KR",
+    "china": "CN", "mainland china": "CN", "prc": "CN", "cn": "CN",
+    "japan": "JP", "jp": "JP",
+    "hong kong": "HK", "hong kong sar": "HK", "hk": "HK",
+    "india": "IN", "in": "IN",
+    "indonesia": "ID", "id": "ID",
+    "united states": "US", "usa": "US", "u.s.": "US", "us": "US",
     "united states of america": "US", "america": "US",
-    "united kingdom": "GB", "uk": "GB", "u.k.": "GB", "britain": "GB", "england": "GB",
-    "thailand": "TH",
-    "taiwan": "TW", "republic of china": "TW",
+    "united kingdom": "GB", "uk": "GB", "u.k.": "GB",
+    "britain": "GB", "england": "GB", "gb": "GB",
+    "thailand": "TH", "th": "TH",
+    "taiwan": "TW", "republic of china": "TW", "tw": "TW",
+    "eu": "EU", "europe": "EU",
+    "singapore": "SG", "sg": "SG",
+    "malaysia": "MY", "my": "MY",
+    "australia": "AU", "au": "AU",
+    "france": "FR", "fr": "FR",
 }
 
 
@@ -90,6 +101,16 @@ def _country_to_region(country: str | None) -> str | None:
     if not country:
         return None
     return COUNTRY_TO_REGION.get(country.strip().lower())
+
+
+def normalize_region(raw: str | None) -> str | None:
+    """Convert any region string to a canonical ISO-2 code (or None)."""
+    if not raw:
+        return None
+    code = raw.strip().upper()
+    if code in MARKET_MAP:
+        return code
+    return COUNTRY_TO_REGION.get(raw.strip().lower())
 
 
 def _hybrid_importance(llm: int | None, size: int) -> int:
@@ -294,7 +315,11 @@ def _collect_rows(since: date | None = None) -> list[dict]:
                 "image_url": ri.image_url,
                 "summary": ar.summary, "source": src.name,
                 "source_tier": _source_tier(src.trust_score),
-                "region": _country_to_region(ar.country) or src.region,
+                "region": (
+                    _country_to_region(ar.country)
+                    or normalize_region(src.region)
+                    or src.region
+                ),
                 "category": ar.category, "sentiment": ar.sentiment, "theme": ar.theme,
                 "event_types": ar.event_types,
                 "importance_score": _hybrid_importance(ar.importance_score, size),
@@ -350,8 +375,62 @@ def _ensure_entity_slugs(conn) -> dict:
     return out
 
 
+_MARKET_MERGE = {
+    "Japan": "JP", "japan": "JP", "jp": "JP",
+    "China": "CN", "china": "CN", "cn": "CN",
+    "Korea": "KR", "korea": "KR", "kr": "KR", "Korea (Global)": "KR",
+    "Thailand": "TH", "thailand": "TH", "th": "TH",
+    "India": "IN", "india": "IN",
+    "eu": "EU", "EU": "EU",
+    "gb": "GB",
+    "XG": None,
+}
+
+
+def _merge_duplicate_markets(conn) -> int:
+    """Merge non-ISO market rows into their canonical ISO counterparts."""
+    merged = 0
+    for old_code, target_iso in _MARKET_MERGE.items():
+        old = conn.execute(
+            text("SELECT id FROM markets WHERE code=:c"), {"c": old_code}
+        ).first()
+        if not old:
+            continue
+        if target_iso is None:
+            cnt = conn.execute(
+                text("SELECT count(*) FROM news_pulse_articles WHERE market_id=:m"),
+                {"m": old[0]},
+            ).scalar()
+            if cnt == 0:
+                conn.execute(text("DELETE FROM markets WHERE id=:id"), {"id": old[0]})
+                merged += 1
+            continue
+        target = conn.execute(
+            text("SELECT id FROM markets WHERE code=:c"), {"c": target_iso}
+        ).first()
+        if not target:
+            name, code, flag = MARKET_MAP.get(target_iso, (target_iso, target_iso, None))
+            tid = uuid.uuid4()
+            conn.execute(
+                text("INSERT INTO markets(id,name,code,region,flag,created_at) "
+                     "VALUES(:id,:n,:c,:r,:f, now())"),
+                {"id": tid, "n": name, "c": code, "r": target_iso, "f": flag},
+            )
+            target = (tid,)
+        if old[0] == target[0]:
+            continue
+        conn.execute(
+            text("UPDATE news_pulse_articles SET market_id=:new WHERE market_id=:old"),
+            {"new": target[0], "old": old[0]},
+        )
+        conn.execute(text("DELETE FROM markets WHERE id=:id"), {"id": old[0]})
+        merged += 1
+    return merged
+
+
 def _finalize(conn) -> dict:
-    """Idempotent post-publish: backfill missing slugs/dates + (re)create brand-count view."""
+    """Idempotent post-publish: merge markets, backfill slugs/dates, brand-count view."""
+    markets_merged = _merge_duplicate_markets(conn)
     rows = conn.execute(
         text("select id, headline from news_pulse_articles where slug is null")
     ).all()
@@ -372,6 +451,7 @@ def _finalize(conn) -> dict:
     return {
         "article_slugs_backfilled": len(rows),
         "dates_backfilled": dates_fixed,
+        "markets_merged": markets_merged,
         **entity,
     }
 

@@ -27,6 +27,9 @@ RSS_FEEDS: dict[str, str] = {
     "jangup.com": "https://www.jangup.com/rss/allArticle.xml",
     "vogue.co.jp": "https://www.vogue.co.jp/feed/rss",
     "fashionsnap.com": "https://www.fashionsnap.com/rss.xml",
+    "dailyvanity.sg": "https://dailyvanity.sg/feed/",
+    "koreaproductpost.com": "https://koreaproductpost.com/feed/",
+    "koreabizwire.com": "https://www.koreabizwire.com/feed",
 }
 
 HTMLCRAWL_DOMAINS: set[str] = {
@@ -51,6 +54,7 @@ HTMLCRAWL_DOMAINS: set[str] = {
     "kao.co.jp",
     "nmpa.gov.cn",
     "pmda.go.jp",
+    "voce.jp",
 }
 
 DISABLED_DOMAINS: set[str] = {
@@ -175,6 +179,152 @@ def disable_dead_sources(session: Session | None = None) -> dict:
     if disabled:
         print(f"[disable] Disabled {disabled} dead sources", flush=True)
     return {"disabled": disabled}
+
+
+_REGION_NORM: dict[str, str] = {
+    "japan": "JP", "jp": "JP",
+    "china": "CN", "cn": "CN",
+    "korea": "KR", "kr": "KR", "south korea": "KR",
+    "thailand": "TH", "th": "TH",
+    "india": "IN", "in": "IN",
+    "indonesia": "ID", "id": "ID",
+    "hong kong": "HK", "hk": "HK",
+    "taiwan": "TW", "tw": "TW",
+    "united states": "US", "usa": "US", "us": "US",
+    "united kingdom": "GB", "uk": "GB", "gb": "GB",
+    "eu": "EU", "europe": "EU",
+    "singapore": "SG", "sg": "SG",
+    "malaysia": "MY", "my": "MY",
+    "australia": "AU", "au": "AU",
+    "france": "FR", "fr": "FR",
+}
+
+
+def normalize_source_regions(session: Session | None = None) -> dict:
+    """Normalize all source region values to uppercase ISO-2 codes."""
+    own_session = session is None
+    session = session or SessionLocal()
+    fixed = 0
+
+    sources = session.execute(select(Source).where(Source.region.isnot(None))).scalars().all()
+    for src in sources:
+        raw = (src.region or "").strip()
+        if not raw:
+            continue
+        if raw.upper() == raw and len(raw) == 2:
+            continue
+        norm = _REGION_NORM.get(raw.lower())
+        if norm and norm != src.region:
+            src.region = norm
+            fixed += 1
+
+    session.commit()
+    if own_session:
+        session.close()
+
+    if fixed:
+        print(f"[normalize_regions] Fixed {fixed} source regions to ISO codes", flush=True)
+    return {"fixed": fixed}
+
+
+NEW_SOURCES: list[dict] = [
+    # --- Thailand (12 sources) ---
+    {"name": "cosmeticsdesign-asia.com", "url": "https://www.cosmeticsdesign-asia.com",
+     "region": "TH", "scraper_class": "google_news", "query": "Thailand beauty cosmetics"},
+    {"name": "nationthailand.com/beauty", "url": "https://www.nationthailand.com",
+     "region": "TH", "scraper_class": "google_news", "query": "beauty cosmetics skincare"},
+    {"name": "bangkokpost.com/beauty", "url": "https://www.bangkokpost.com",
+     "region": "TH", "scraper_class": "google_news", "query": "beauty cosmetics skincare"},
+    {"name": "lofficielthailand.com/beauty", "url": "https://www.lofficielthailand.com/category/beauty",
+     "region": "TH", "scraper_class": "google_news"},
+    {"name": "dailyvanity.sg", "url": "https://dailyvanity.sg",
+     "region": "TH", "scraper_class": "rss", "feed_url": "https://dailyvanity.sg/feed/"},
+    {"name": "praew.com", "url": "https://www.praew.com",
+     "region": "TH", "scraper_class": "google_news", "query": "beauty skincare"},
+    {"name": "beautrium.com", "url": "https://www.beautrium.com",
+     "region": "TH", "scraper_class": "google_news"},
+    {"name": "thairath.co.th/beauty", "url": "https://www.thairath.co.th",
+     "region": "TH", "scraper_class": "google_news", "query": "beauty cosmetics skincare"},
+    {"name": "prachachat.net/beauty", "url": "https://www.prachachat.net",
+     "region": "TH", "scraper_class": "google_news", "query": "beauty cosmetics"},
+    {"name": "mega-asia.com/beauty", "url": "https://mega-asia.com/beauty",
+     "region": "TH", "scraper_class": "google_news"},
+    {"name": "prestigeonline.com/th/beauty", "url": "https://www.prestigeonline.com/th/beauty-wellness/beauty",
+     "region": "TH", "scraper_class": "google_news"},
+    {"name": "tatlerasia.com/th/beauty", "url": "https://www.tatlerasia.com",
+     "region": "TH", "scraper_class": "google_news", "query": "Thailand beauty"},
+    # --- Korea (additional) ---
+    {"name": "koreaproductpost.com", "url": "https://koreaproductpost.com",
+     "region": "KR", "scraper_class": "rss", "feed_url": "https://koreaproductpost.com/feed/"},
+    {"name": "koreabizwire.com", "url": "https://www.koreabizwire.com",
+     "region": "KR", "scraper_class": "rss", "feed_url": "https://www.koreabizwire.com/feed"},
+    {"name": "koreaherald.com/beauty", "url": "https://www.koreaherald.com",
+     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics K-beauty"},
+    {"name": "koreatimes.co.kr/beauty", "url": "https://www.koreatimes.co.kr",
+     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics K-beauty"},
+    {"name": "en.yna.co.kr/beauty", "url": "https://en.yna.co.kr",
+     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics"},
+    {"name": "pulse.mk.co.kr/beauty", "url": "https://pulse.mk.co.kr",
+     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics"},
+    {"name": "kedglobal.com/beauty", "url": "https://www.kedglobal.com",
+     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics"},
+    # --- Japan (additional) ---
+    {"name": "japantimes.co.jp/beauty", "url": "https://www.japantimes.co.jp",
+     "region": "JP", "scraper_class": "google_news", "query": "beauty cosmetics J-beauty"},
+    {"name": "nippon.com/beauty", "url": "https://www.nippon.com",
+     "region": "JP", "scraper_class": "google_news", "query": "beauty cosmetics"},
+    {"name": "japantoday.com/beauty", "url": "https://japantoday.com",
+     "region": "JP", "scraper_class": "google_news", "query": "beauty cosmetics skincare"},
+    {"name": "cosme.net", "url": "https://www.cosme.net",
+     "region": "JP", "scraper_class": "google_news"},
+    {"name": "voce.jp", "url": "https://voce.jp",
+     "region": "JP", "scraper_class": "html_crawl"},
+    {"name": "beauty-matome.net", "url": "https://beauty-matome.net",
+     "region": "JP", "scraper_class": "google_news"},
+]
+
+
+def seed_new_sources(session: Session | None = None) -> dict:
+    """Seed new Thai/KR/JP sources into the database (idempotent)."""
+    own_session = session is None
+    session = session or SessionLocal()
+    created = 0
+    skipped = 0
+
+    for s in NEW_SOURCES:
+        existing = session.execute(
+            select(Source).where(Source.name == s["name"])
+        ).scalar_one_or_none()
+        if existing:
+            skipped += 1
+            continue
+        try:
+            src = Source(
+                name=s["name"],
+                url=s["url"],
+                type="news",
+                region=s["region"],
+                scraper_class=s["scraper_class"],
+                feed_url=s.get("feed_url"),
+                query=s.get("query"),
+                gl=s["region"].lower() if s["region"] else None,
+                hl=s["region"].lower() if s["region"] else None,
+                enabled=True,
+            )
+            session.add(src)
+            session.flush()
+            created += 1
+        except Exception:
+            session.rollback()
+            skipped += 1
+
+    session.commit()
+    if own_session:
+        session.close()
+
+    if created:
+        print(f"[seed_sources] Added {created} new sources ({skipped} existed)", flush=True)
+    return {"created": created, "skipped": skipped}
 
 
 def load_sources_from_csv(csv_path: str, session: Session | None = None) -> dict:
