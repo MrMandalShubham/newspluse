@@ -526,26 +526,276 @@ def publish_to_platform(since: date | None = None) -> dict:
                      f"ON themes USING gin(facet_{facet} jsonb_path_ops)")
             )
     data = _collect_rows(since=since)
-    stats = {"articles": 0, "brands_matched": 0, "brands_new": 0,
-             "products_matched": 0, "products_new": 0, "markets_new": 0}
+    stats: dict[str, int] = {
+        "articles": 0, "brands_matched": 0, "brands_new": 0,
+        "products_matched": 0, "products_new": 0, "markets_new": 0,
+    }
+    if not data:
+        try:
+            with plat.begin() as conn:
+                stats.update(_finalize(conn))
+            return stats
+        finally:
+            plat.dispose()
+
     try:
         with plat.begin() as conn:
+            # --- Pre-load entity caches (5 bulk SELECTs) ---
+            market_cache: dict[str, object] = {}
+            for row in conn.execute(text("SELECT id, code FROM markets")):
+                market_cache[row[1]] = row[0]
+
+            brand_cache: dict[str, object] = {}
+            for row in conn.execute(text("SELECT id, lower(name) FROM brands")):
+                brand_cache[row[1]] = row[0]
+
+            product_cache: dict[str, object] = {}
+            for row in conn.execute(
+                text("SELECT id, lower(name) FROM products_master"),
+            ):
+                product_cache[row[1]] = row[0]
+
+            company_cache: dict[str, object] = {}
+            for row in conn.execute(text("SELECT id, lower(name) FROM companies")):
+                company_cache[row[1]] = row[0]
+
+            ingredient_cache: dict[str, object] = {}
+            for row in conn.execute(
+                text("SELECT id, lower(name) FROM ingredients"),
+            ):
+                ingredient_cache[row[1]] = row[0]
+
+            # --- Pre-fetch existing articles by URL (1 query) ---
+            all_urls = [d["url"] for d in data]
+            existing_articles: dict[str, object] = {}
+            for row in conn.execute(
+                text(
+                    "SELECT url, id FROM news_pulse_articles "
+                    "WHERE url = ANY(:urls)"
+                ),
+                {"urls": all_urls},
+            ):
+                existing_articles[row[0]] = row[1]
+
+            print(
+                f"  [publish] caches loaded: {len(market_cache)} markets, "
+                f"{len(brand_cache)} brands, {len(product_cache)} products, "
+                f"{len(existing_articles)}/{len(data)} existing articles",
+                flush=True,
+            )
+
+            # --- Process articles with cached lookups ---
+            article_ids: list = []
+            brand_links: list[dict] = []
+            company_links: list[dict] = []
+            ingredient_links: list[dict] = []
+            product_links: list[dict] = []
+
             for d in data:
-                market_id = _market_id(conn, d["region"], stats)
-                aid = _upsert_article(conn, d, market_id)
+                region = d["region"]
+                market_id = None
+                if region:
+                    if region in market_cache:
+                        market_id = market_cache[region]
+                    else:
+                        name, code, flag = MARKET_MAP.get(
+                            region, (region, region, None),
+                        )
+                        mid = uuid.uuid4()
+                        conn.execute(
+                            text(
+                                "INSERT INTO markets"
+                                "(id,name,code,region,flag,created_at) "
+                                "VALUES(:id,:n,:c,:r,:f, now())"
+                            ),
+                            {
+                                "id": mid, "n": name, "c": code,
+                                "r": region, "f": flag,
+                            },
+                        )
+                        market_cache[code] = mid
+                        stats["markets_new"] += 1
+                        market_id = mid
+
+                story_id = d.get("story_id")
+                fields = {
+                    "headline": d["headline"], "summary": d["summary"],
+                    "source": d["source"], "source_tier": d["source_tier"],
+                    "market_id": market_id, "category": d["category"],
+                    "sentiment": d["sentiment"], "theme": d["theme"],
+                    "reach": None, "image_url": d.get("image_url"),
+                    "published_at": d["published_at"],
+                    "signal_tier": d["signal_tier"],
+                    "topic_velocity": d["topic_velocity"],
+                    "importance_score": d["importance_score"],
+                    "event_types": json.dumps(d["event_types"] or []),
+                    "story_id": story_id,
+                }
+
+                url = d["url"]
+                if url in existing_articles:
+                    aid = existing_articles[url]
+                    conn.execute(
+                        text(
+                            "UPDATE news_pulse_articles SET "
+                            "headline=:headline, summary=:summary, "
+                            "source=:source, source_tier=:source_tier, "
+                            "market_id=:market_id, category=:category, "
+                            "sentiment=:sentiment, theme=:theme, "
+                            "reach=:reach, image_url=:image_url, "
+                            "published_at=:published_at, "
+                            "signal_tier=:signal_tier, "
+                            "topic_velocity=:topic_velocity, "
+                            "importance_score=:importance_score, "
+                            "event_types=cast(:event_types as jsonb), "
+                            "story_id=:story_id WHERE id=:id"
+                        ),
+                        {**fields, "id": aid},
+                    )
+                else:
+                    aid = uuid.uuid4()
+                    conn.execute(
+                        text(
+                            "INSERT INTO news_pulse_articles"
+                            "(id,slug,story_id,url,headline,summary,source,"
+                            "source_tier,market_id,category,sentiment,theme,"
+                            "reach,image_url,published_at,signal_tier,"
+                            "topic_velocity,importance_score,event_types,"
+                            "created_at) VALUES("
+                            ":id,:slug,:story_id,:url,:headline,:summary,"
+                            ":source,:source_tier,:market_id,:category,"
+                            ":sentiment,:theme,:reach,:image_url,"
+                            ":published_at,:signal_tier,:topic_velocity,"
+                            ":importance_score,"
+                            "cast(:event_types as jsonb), now())"
+                        ),
+                        {
+                            **fields, "id": aid, "url": url,
+                            "slug": article_slug(d["headline"], aid),
+                        },
+                    )
+
+                article_ids.append(aid)
+
                 for name in _unique(d["brands"]):
-                    _link(conn, "news_article_brands", "brand_id", aid,
-                          _brand_id(conn, name, stats))
+                    lname = name.strip().lower()
+                    if lname in brand_cache:
+                        bid = brand_cache[lname]
+                        stats["brands_matched"] += 1
+                    else:
+                        bid = uuid.uuid4()
+                        conn.execute(
+                            text(
+                                "INSERT INTO brands(id,code,name,created_at) "
+                                "VALUES(:id,:c,:n, now())"
+                            ),
+                            {
+                                "id": bid,
+                                "c": f"{_slug(name)}-{bid.hex[:6]}",
+                                "n": name,
+                            },
+                        )
+                        brand_cache[lname] = bid
+                        stats["brands_new"] += 1
+                    brand_links.append({"a": aid, "e": bid})
+
                 for name in _unique(d["companies"]):
-                    _link(conn, "news_article_companies", "company_id", aid,
-                          _lookup_id(conn, "companies", name))
+                    lname = name.strip().lower()
+                    if lname in company_cache:
+                        cid = company_cache[lname]
+                    else:
+                        cid = uuid.uuid4()
+                        conn.execute(
+                            text(
+                                "INSERT INTO companies(id,name,created_at) "
+                                "VALUES(:id,:n, now())"
+                            ),
+                            {"id": cid, "n": name},
+                        )
+                        company_cache[lname] = cid
+                    company_links.append({"a": aid, "e": cid})
+
                 for name in _unique(d["ingredients"]):
-                    _link(conn, "news_article_ingredients", "ingredient_id", aid,
-                          _lookup_id(conn, "ingredients", name))
+                    lname = name.strip().lower()
+                    if lname in ingredient_cache:
+                        iid = ingredient_cache[lname]
+                    else:
+                        iid = uuid.uuid4()
+                        conn.execute(
+                            text(
+                                "INSERT INTO ingredients(id,name,created_at) "
+                                "VALUES(:id,:n, now())"
+                            ),
+                            {"id": iid, "n": name},
+                        )
+                        ingredient_cache[lname] = iid
+                    ingredient_links.append({"a": aid, "e": iid})
+
                 for name in _unique(d["products"]):
-                    _link(conn, "news_article_products", "product_id", aid,
-                          _product_id(conn, name, stats))
+                    lname = name.strip().lower()
+                    if lname in product_cache:
+                        pid = product_cache[lname]
+                        stats["products_matched"] += 1
+                    else:
+                        pid = uuid.uuid4()
+                        conn.execute(
+                            text(
+                                "INSERT INTO products_master"
+                                "(id,name,data_source,created_at,updated_at) "
+                                "VALUES(:id,:n,'newspulse', now(), now())"
+                            ),
+                            {"id": pid, "n": name},
+                        )
+                        product_cache[lname] = pid
+                        stats["products_new"] += 1
+                    product_links.append({"a": aid, "e": pid})
+
                 stats["articles"] += 1
+
+            # --- Bulk junction deletes (4 queries total) ---
+            for tbl in _JUNCTIONS:
+                conn.execute(
+                    text(f"DELETE FROM {tbl} WHERE article_id = ANY(:ids)"),
+                    {"ids": article_ids},
+                )
+
+            # --- Bulk junction inserts (executemany) ---
+            if brand_links:
+                conn.execute(
+                    text(
+                        "INSERT INTO news_article_brands(article_id,brand_id) "
+                        "VALUES(:a,:e) ON CONFLICT DO NOTHING"
+                    ),
+                    brand_links,
+                )
+            if company_links:
+                conn.execute(
+                    text(
+                        "INSERT INTO news_article_companies"
+                        "(article_id,company_id) "
+                        "VALUES(:a,:e) ON CONFLICT DO NOTHING"
+                    ),
+                    company_links,
+                )
+            if ingredient_links:
+                conn.execute(
+                    text(
+                        "INSERT INTO news_article_ingredients"
+                        "(article_id,ingredient_id) "
+                        "VALUES(:a,:e) ON CONFLICT DO NOTHING"
+                    ),
+                    ingredient_links,
+                )
+            if product_links:
+                conn.execute(
+                    text(
+                        "INSERT INTO news_article_products"
+                        "(article_id,product_id) "
+                        "VALUES(:a,:e) ON CONFLICT DO NOTHING"
+                    ),
+                    product_links,
+                )
+
         with plat.begin() as conn:
             stats.update(_finalize(conn))
         return stats

@@ -50,56 +50,24 @@ def fetch_site_search_sources(
     totals: dict[str, int] = {}
     source_results: list[dict] = []
 
-    # Pre-load known URL hashes for fast dedup before resolving
     existing_hashes = known_urls(session)
 
-    # Phase 1 — collect payloads, skip already-known URLs before resolving
-    all_payloads: list[dict] = []
+    # Phase 1a — collect search results from all sources (fast RSS, no browser)
+    all_search_items: list[tuple] = []
     for src in sources:
-        src_count = 0
         try:
             domain = src.url.rstrip("/")
             if domain.startswith("http"):
                 domain = domain.split("//", 1)[1]
             query_terms = src.query or DEFAULT_QUERY
             search_query = f"site:{domain} {query_terms}"
-
             items = client.search(search_query, limit=limit_per_source)
-
             for item in items:
-                try:
-                    final_url, html = resolver.resolve(item["gnews_url"])
-                    if not html:
-                        totals["unresolved"] = totals.get("unresolved", 0) + 1
-                        continue
-
-                    if content_hash(final_url) in existing_hashes:
-                        totals["pre_dedup"] = totals.get("pre_dedup", 0) + 1
-                        continue
-
-                    all_payloads.append({
-                        "url": final_url,
-                        "title": item["title"],
-                        "content": trafilatura.extract(html),
-                        "image_url": extract_image(html),
-                        "source_name": item["source_name"] or src.name,
-                        "published_at": (
-                            item["published_at"].isoformat()
-                            if item["published_at"] else None
-                        ),
-                        "region": src.region,
-                    })
-                    src_count += 1
-                except Exception:
-                    totals["resolve_error"] = totals.get("resolve_error", 0) + 1
-
+                all_search_items.append((src, item))
             src.last_success_at = datetime.now().astimezone()
             src.last_error = None
             session.commit()
-            print(
-                f"[site-search] {src.name}: {len(items)} found, {src_count} new",
-                flush=True,
-            )
+            print(f"[site-search] {src.name}: {len(items)} found", flush=True)
         except Exception as e:
             src.last_error = str(e)
             try:
@@ -109,19 +77,60 @@ def fetch_site_search_sources(
             totals["feed_error"] = totals.get("feed_error", 0) + 1
             print(f"[site-search] {src.name}: ERROR - {e}", flush=True)
 
-        source_results.append({"source": src.name, "new": src_count})
+    # Phase 1b — batch resolve all gnews URLs concurrently (8 browser pages)
+    all_payloads: list[dict] = []
+    if all_search_items:
+        gnews_urls = [item["gnews_url"] for _, item in all_search_items]
+        print(
+            f"[site-search] Resolving {len(gnews_urls)} URLs (8 concurrent)...",
+            flush=True,
+        )
+        resolved = resolver.resolve_batch(gnews_urls)
+
+        src_new: dict[str, int] = {}
+        for (src, item), (final_url, html) in zip(all_search_items, resolved, strict=True):
+            if not html:
+                totals["unresolved"] = totals.get("unresolved", 0) + 1
+                continue
+            if content_hash(final_url) in existing_hashes:
+                totals["pre_dedup"] = totals.get("pre_dedup", 0) + 1
+                continue
+            all_payloads.append({
+                "url": final_url,
+                "title": item["title"],
+                "content": trafilatura.extract(html),
+                "image_url": extract_image(html),
+                "source_name": item["source_name"] or src.name,
+                "published_at": (
+                    item["published_at"].isoformat()
+                    if item["published_at"] else None
+                ),
+                "region": src.region,
+            })
+            src_new[src.name] = src_new.get(src.name, 0) + 1
+
+        for src in sources:
+            cnt = src_new.get(src.name, 0)
+            source_results.append({"source": src.name, "new": cnt})
+            if cnt:
+                print(f"[site-search] {src.name}: {cnt} new", flush=True)
+    else:
+        for src in sources:
+            source_results.append({"source": src.name, "new": 0})
 
     # Phase 2+3 — concurrent LLM classification + sequential DB writes
-    print(
-        f"[site-search] Classifying {len(all_payloads)} articles (8 concurrent)...",
-        flush=True,
-    )
-    batch_counts = batch_ingest(
-        all_payloads, session=session, storage=storage,
-        summarizer=summarizer, embedder=embedder,
-    )
-    for k, v in batch_counts.items():
-        totals[k] = totals.get(k, 0) + v
+    if all_payloads:
+        print(
+            f"[site-search] Classifying {len(all_payloads)} articles "
+            f"(8 concurrent)...",
+            flush=True,
+        )
+        batch_counts = batch_ingest(
+            all_payloads, session=session, storage=storage,
+            summarizer=summarizer, embedder=embedder,
+        )
+        for k, v in batch_counts.items():
+            totals[k] = totals.get(k, 0) + v
 
     resolver.close()
     client.close()

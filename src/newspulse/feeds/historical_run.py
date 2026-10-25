@@ -73,34 +73,45 @@ def run_history(
     try:
         for w_start, w_end in weekly_windows(weeks, offset=offset):
             window = f"after:{w_start.isoformat()} before:{w_end.isoformat()}"
-            window_payloads: list[dict] = []
+            window_items: list[tuple[str, dict]] = []
             for region, base_q in QUERIES:
                 try:
                     items = client.search(f"{base_q} {window}", limit=limit)
-                except Exception:  # noqa: BLE001 - transient network; skip this query
+                except Exception:  # noqa: BLE001
                     totals["query_error"] = totals.get("query_error", 0) + 1
                     continue
                 for item in items:
-                    try:
-                        final_url, html = resolver.resolve(item["gnews_url"])
-                        if not html:
-                            totals["unresolved"] = totals.get("unresolved", 0) + 1
-                            continue
-                        window_payloads.append({
-                            "url": final_url,
-                            "title": item["title"],
-                            "content": trafilatura.extract(html),
-                            "image_url": extract_image(html),
-                            "source_name": item["source_name"],
-                            "published_at": (
-                                item["published_at"].isoformat()
-                                if item["published_at"] else None
-                            ),
-                            "region": region,
-                        })
-                    except Exception:  # noqa: BLE001 - transient; skip one item
-                        totals["error"] = totals.get("error", 0) + 1
+                    window_items.append((region, item))
                 print(f"[{w_start}..{w_end}] {region}: {len(items)} items", flush=True)
+
+            if not window_items:
+                continue
+
+            gnews_urls = [item["gnews_url"] for _, item in window_items]
+            print(
+                f"[{w_start}..{w_end}] Resolving {len(gnews_urls)} URLs "
+                f"(8 concurrent)...",
+                flush=True,
+            )
+            resolved = resolver.resolve_batch(gnews_urls)
+
+            window_payloads: list[dict] = []
+            for (region, item), (final_url, html) in zip(window_items, resolved, strict=True):
+                if not html:
+                    totals["unresolved"] = totals.get("unresolved", 0) + 1
+                    continue
+                window_payloads.append({
+                    "url": final_url,
+                    "title": item["title"],
+                    "content": trafilatura.extract(html),
+                    "image_url": extract_image(html),
+                    "source_name": item["source_name"],
+                    "published_at": (
+                        item["published_at"].isoformat()
+                        if item["published_at"] else None
+                    ),
+                    "region": region,
+                })
 
             if window_payloads:
                 batch_counts = batch_ingest(

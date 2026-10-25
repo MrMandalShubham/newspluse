@@ -6,6 +6,7 @@ article with a headless browser, then hand the HTML to readability + ingestion.
 This surfaces scattered Korean/K-beauty news that mentions catalog brands.
 """
 
+import asyncio
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree as ET
@@ -13,6 +14,7 @@ from xml.etree import ElementTree as ET
 import httpx
 
 GN_RSS = "https://news.google.com/rss/search"
+RESOLVE_CONCURRENCY = 8
 
 
 def _clean_title(title: str, source: str | None) -> str:
@@ -105,6 +107,58 @@ class GoogleNewsResolver:
             return None, None
         finally:
             page.close()
+
+    def resolve_batch(
+        self,
+        gnews_urls: list[str],
+        max_concurrent: int = RESOLVE_CONCURRENCY,
+    ) -> list[tuple[str | None, str | None]]:
+        """Resolve multiple Google News URLs concurrently using async Playwright."""
+        if not gnews_urls:
+            return []
+        return asyncio.run(self._resolve_batch_async(gnews_urls, max_concurrent))
+
+    async def _resolve_one_async(
+        self, browser, gnews_url: str,
+    ) -> tuple[str | None, str | None]:
+        page = await browser.new_page(user_agent=self.user_agent)
+        try:
+            await page.goto(
+                gnews_url, wait_until="domcontentloaded", timeout=self.timeout_ms,
+            )
+            try:
+                await page.wait_for_url(
+                    lambda u: "news.google.com" not in u, timeout=15000,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            await page.wait_for_timeout(self.settle_ms)
+            final = page.url
+            html = await page.content()
+            if "news.google.com" in final:
+                return None, None
+            return final, html
+        except Exception:  # noqa: BLE001
+            return None, None
+        finally:
+            await page.close()
+
+    async def _resolve_batch_async(
+        self, urls: list[str], max_concurrent: int,
+    ) -> list[tuple[str | None, str | None]]:
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            sem = asyncio.Semaphore(max_concurrent)
+
+            async def _limited(url: str) -> tuple[str | None, str | None]:
+                async with sem:
+                    return await self._resolve_one_async(browser, url)
+
+            results = await asyncio.gather(*[_limited(u) for u in urls])
+            await browser.close()
+        return list(results)
 
     def close(self) -> None:
         if self._browser is not None:
