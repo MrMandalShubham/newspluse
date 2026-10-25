@@ -977,29 +977,46 @@ def rematch_platform_links() -> dict:
 
 
 def _collect_clusters() -> list[dict]:
-    """Gather cluster data from the working DB for topic_clusters publish."""
-    from collections import Counter
+    """Gather cluster data from the working DB for topic_clusters publish.
+
+    Single query loads all multi-article cluster members at once, then
+    aggregates per cluster in Python (avoids N+1 per-cluster queries).
+    """
+    from collections import Counter, defaultdict
 
     work = SessionLocal()
     try:
-        clusters = work.execute(
-            select(ReportCluster).where(ReportCluster.size >= 2).order_by(ReportCluster.id)
-        ).scalars().all()
+        cluster_map: dict[int, object] = {}
+        for cl in work.execute(
+            select(ReportCluster).where(ReportCluster.size >= 2)
+        ).scalars():
+            cluster_map[cl.id] = cl
+
+        if not cluster_map:
+            return []
+
+        rows = work.execute(
+            select(ArticleReport, RawItem, Source)
+            .join(RawItem, RawItem.id == ArticleReport.raw_item_id)
+            .join(Source, Source.id == RawItem.source_id)
+            .where(ArticleReport.cluster_id.in_(list(cluster_map)))
+        ).all()
+
+        members_by_cluster: dict[int, list] = defaultdict(list)
+        for ar, ri, src in rows:
+            members_by_cluster[ar.cluster_id].append((ar, ri, src))
+
         out = []
-        for cl in clusters:
-            members = work.execute(
-                select(ArticleReport, RawItem, Source)
-                .join(RawItem, RawItem.id == ArticleReport.raw_item_id)
-                .join(Source, Source.id == RawItem.source_id)
-                .where(ArticleReport.cluster_id == cl.id)
-            ).all()
+        for cid, cl in cluster_map.items():
+            members = members_by_cluster.get(cid)
             if not members:
                 continue
 
-            countries = Counter()
-            categories = Counter()
-            sentiments = []
-            urls = []
+            countries: Counter = Counter()
+            categories: Counter = Counter()
+            sentiments: list[str] = []
+            urls: list[str] = []
+            sources_seen: set[str] = set()
             for ar, ri, src in members:
                 region = _country_to_region(ar.country) or src.region
                 if region:
@@ -1009,6 +1026,7 @@ def _collect_clusters() -> list[dict]:
                 if ar.sentiment:
                     sentiments.append(ar.sentiment)
                 urls.append(ri.url)
+                sources_seen.add(src.name)
 
             primary_country = countries.most_common(1)[0][0] if countries else None
             is_mixed_country = len(countries) > 1 and (
@@ -1034,7 +1052,7 @@ def _collect_clusters() -> list[dict]:
                 "name": cl.label,
                 "description": cl.summary,
                 "article_count": cl.size,
-                "source_count": len({src.name for _, _, src in members}),
+                "source_count": len(sources_seen),
                 "primary_country": primary_country if not is_mixed_country else None,
                 "primary_category": primary_category if not is_mixed_category else None,
                 "is_mixed_country": is_mixed_country,
@@ -1052,51 +1070,89 @@ def publish_topic_clusters() -> dict:
     """Publish topic_clusters + members to the platform DB.
 
     Atomic: truncates both tables and re-inserts in one transaction.
-    If the transaction fails, old data is preserved (rollback).
+    Pre-fetches article URL→ID map and uses executemany for bulk inserts.
     """
     cluster_data = _collect_clusters()
     plat = create_engine(settings.publish_database_url, pool_pre_ping=True)
     stats = {"clusters": 0, "members": 0, "skipped_no_article": 0}
+    if not cluster_data:
+        plat.dispose()
+        return stats
     try:
         with plat.begin() as conn:
             conn.execute(text("DELETE FROM topic_cluster_members"))
             conn.execute(text("DELETE FROM topic_clusters"))
 
+            all_urls: set[str] = set()
+            for cd in cluster_data:
+                all_urls.update(cd["urls"])
+
+            url_to_aid: dict[str, object] = {}
+            for row in conn.execute(
+                text(
+                    "SELECT url, id FROM news_pulse_articles "
+                    "WHERE url = ANY(:urls)"
+                ),
+                {"urls": list(all_urls)},
+            ):
+                url_to_aid[row[0]] = row[1]
+
+            cluster_rows: list[dict] = []
+            member_rows: list[dict] = []
+
             for cd in cluster_data:
                 cid = uuid.uuid4()
-                slug = re.sub(r"[^a-z0-9]+", "-", cd["name"].lower()).strip("-")[:80]
-                slug = f"{slug}-{cid.hex[:6]}" if slug else f"topic-{cid.hex[:6]}"
-
-                conn.execute(text(
-                    "INSERT INTO topic_clusters(id, name, slug, description, "
-                    "article_count, source_count, primary_country, primary_category, "
-                    "is_mixed_country, is_mixed_category, sentiment, velocity, "
-                    "created_at, updated_at) VALUES ("
-                    ":id, :name, :slug, :desc, :acnt, :scnt, :pc, :pcat, "
-                    ":imc, :imcat, :sent, :vel, now(), now())"
-                ), {
+                slug = re.sub(
+                    r"[^a-z0-9]+", "-", cd["name"].lower(),
+                ).strip("-")[:80]
+                slug = (
+                    f"{slug}-{cid.hex[:6]}" if slug
+                    else f"topic-{cid.hex[:6]}"
+                )
+                cluster_rows.append({
                     "id": cid, "name": cd["name"], "slug": slug,
                     "desc": cd["description"],
-                    "acnt": cd["article_count"], "scnt": cd["source_count"],
-                    "pc": cd["primary_country"], "pcat": cd["primary_category"],
-                    "imc": cd["is_mixed_country"], "imcat": cd["is_mixed_category"],
+                    "acnt": cd["article_count"],
+                    "scnt": cd["source_count"],
+                    "pc": cd["primary_country"],
+                    "pcat": cd["primary_category"],
+                    "imc": cd["is_mixed_country"],
+                    "imcat": cd["is_mixed_category"],
                     "sent": cd["sentiment"], "vel": cd["velocity"],
                 })
                 stats["clusters"] += 1
 
                 for url in cd["urls"]:
-                    row = conn.execute(
-                        text("SELECT id FROM news_pulse_articles WHERE url = :u"),
-                        {"u": url},
-                    ).first()
-                    if row:
-                        conn.execute(text(
-                            "INSERT INTO topic_cluster_members(cluster_id, article_id) "
-                            "VALUES(:cid, :aid) ON CONFLICT DO NOTHING"
-                        ), {"cid": cid, "aid": row[0]})
+                    aid = url_to_aid.get(url)
+                    if aid:
+                        member_rows.append({"cid": cid, "aid": aid})
                         stats["members"] += 1
                     else:
                         stats["skipped_no_article"] += 1
+
+            if cluster_rows:
+                conn.execute(
+                    text(
+                        "INSERT INTO topic_clusters(id, name, slug, "
+                        "description, article_count, source_count, "
+                        "primary_country, primary_category, "
+                        "is_mixed_country, is_mixed_category, "
+                        "sentiment, velocity, created_at, updated_at) "
+                        "VALUES(:id, :name, :slug, :desc, :acnt, :scnt, "
+                        ":pc, :pcat, :imc, :imcat, :sent, :vel, "
+                        "now(), now())"
+                    ),
+                    cluster_rows,
+                )
+            if member_rows:
+                conn.execute(
+                    text(
+                        "INSERT INTO topic_cluster_members"
+                        "(cluster_id, article_id) "
+                        "VALUES(:cid, :aid) ON CONFLICT DO NOTHING"
+                    ),
+                    member_rows,
+                )
 
         return stats
     finally:
