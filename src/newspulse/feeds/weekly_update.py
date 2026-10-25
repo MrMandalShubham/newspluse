@@ -29,6 +29,8 @@ from newspulse.publish.platform import (
     publish_topic_clusters,
     refresh_platform_signals,
 )
+from newspulse.reports.merger import MistralMerger
+from newspulse.reports.pipeline import build_clusters, merge_clusters
 
 
 def daily_update() -> dict:
@@ -77,11 +79,10 @@ def daily_update() -> dict:
         print(f"[daily] WARNING: disable dead sources failed: {e}", flush=True)
 
     # --- Source 1: Google News broad queries (existing 6-market queries) ---
-    print("[daily] Step 1/7: Pulling articles from Google News...", flush=True)
+    print("[daily] Step 1/8: Pulling articles from Google News...", flush=True)
     try:
-        history = run_history(weeks=1, limit=20, rebuild=True, offset=0)
+        history = run_history(weeks=1, limit=20, rebuild=False, offset=0)
         results["ingest"] = history["totals"]
-        results["clusters_built"] = history.get("rebuild")
         ingested = history["totals"].get("ingested", 0)
         duplicates = history["totals"].get("duplicate", 0)
         total_ingested += ingested
@@ -91,7 +92,7 @@ def daily_update() -> dict:
         results["error"] = str(e)
 
     # --- Source 2: RSS feeds (Class A) ---
-    print("[daily] Step 2/7: Fetching RSS feeds...", flush=True)
+    print("[daily] Step 2/8: Fetching RSS feeds...", flush=True)
     try:
         rss = fetch_rss_sources()
         results["rss"] = rss
@@ -103,7 +104,7 @@ def daily_update() -> dict:
         results["rss_error"] = str(e)
 
     # --- Source 3: HTML crawl (Class E — no RSS, not on Google News) ---
-    print("[daily] Step 3/7: Crawling HTML article listings...", flush=True)
+    print("[daily] Step 3/8: Crawling HTML article listings...", flush=True)
     try:
         html = fetch_html_sources()
         results["html_crawl"] = html
@@ -115,7 +116,7 @@ def daily_update() -> dict:
         results["html_crawl_error"] = str(e)
 
     # --- Source 4: Google News site-search (Class D) ---
-    print("[daily] Step 4/7: Running site-specific searches...", flush=True)
+    print("[daily] Step 4/8: Running site-specific searches...", flush=True)
     try:
         site = fetch_site_search_sources()
         results["site_search"] = site
@@ -131,10 +132,26 @@ def daily_update() -> dict:
         results["publish"] = "skipped"
         return results
 
+    # --- Step 5: Cluster all new articles (incremental + concurrent merge) ---
+    print("[daily] Step 5/8: Clustering new articles...", flush=True)
+    try:
+        cluster_stats = build_clusters()
+        merge_stats = merge_clusters(MistralMerger())
+        results["clusters_built"] = {"cluster": cluster_stats, "merge": merge_stats}
+        print(
+            f"[daily] Clustering: {cluster_stats.get('assigned', 0)} assigned, "
+            f"{cluster_stats.get('new_clusters', 0)} new clusters, "
+            f"{merge_stats.get('merged', 0)} merged by LLM",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[daily] ERROR: clustering failed: {e}", flush=True)
+        results["cluster_error"] = str(e)
+
     since = today - timedelta(days=3)
     print(f"[daily] Publishing only articles since {since} (3-day window)", flush=True)
 
-    print("[daily] Step 5/7: Publishing articles to platform DB...", flush=True)
+    print("[daily] Step 6/8: Publishing articles to platform DB...", flush=True)
     try:
         pub = publish_to_platform(since=since)
         results["publish"] = pub
@@ -143,7 +160,7 @@ def daily_update() -> dict:
         print(f"[daily] ERROR: publish failed: {e}", flush=True)
         results["publish_error"] = str(e)
 
-    print("[daily] Step 6/7: Refreshing signals...", flush=True)
+    print("[daily] Step 7/8: Refreshing signals...", flush=True)
     try:
         sig = refresh_platform_signals(since=since)
         results["signals"] = sig
@@ -152,7 +169,7 @@ def daily_update() -> dict:
         print(f"[daily] ERROR: signals failed: {e}", flush=True)
         results["signals_error"] = str(e)
 
-    print("[daily] Step 7/7: Publishing topic clusters...", flush=True)
+    print("[daily] Step 8/8: Publishing topic clusters...", flush=True)
     try:
         tc = publish_topic_clusters()
         results["topic_clusters"] = tc

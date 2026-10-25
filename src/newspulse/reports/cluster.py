@@ -1,20 +1,10 @@
 """Clustering — group articles by embedding similarity (same product / topic).
 
-Pure functions (no DB, no LLM): cosine similarity + single-linkage greedy
-clustering with a similarity threshold. Deterministic for a fixed input order,
-which makes it straightforward to test.
+Uses numpy-vectorised cosine similarity for speed (milliseconds on 3k+ articles).
+Deterministic for a fixed input order, which makes it straightforward to test.
 """
 
-import math
-
-
-def cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    return dot / (na * nb)
+import numpy as np
 
 
 def greedy_cluster(
@@ -25,33 +15,58 @@ def greedy_cluster(
     ``items`` is (id, vector). An item joins an existing cluster if it is similar
     enough, otherwise it starts a new one. ``linkage`` controls the comparison:
 
-      * ``"single"``   — similar to ANY member (max). Simple, but chains
-                         (A~B, B~C pulls A,B,C together even if A is unlike C),
-                         which collapses large corpora into one mega-cluster.
-      * ``"centroid"`` — similar to the cluster's MEAN vector. Resists chaining,
-                         so it scales to thousands of articles. Also cheaper
-                         (one comparison per cluster, not per member).
+      * ``"single"``   — similar to ANY member (max). Simple, but chains.
+      * ``"centroid"`` — similar to the cluster's MEAN vector. Resists chaining.
 
     Returns clusters as lists of ids, preserving input order.
     """
+    if not items:
+        return []
+
+    ids = [i for i, _ in items]
+    vecs = np.array([v for _, v in items], dtype=np.float64)
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    unit = vecs / norms
+
     clusters: list[dict] = []
-    for id_, vec in items:
-        best: dict | None = None
+    for idx in range(len(ids)):
+        u = unit[idx]
+        best_idx: int | None = None
         best_sim = threshold
-        for cl in clusters:
+
+        if clusters:
             if linkage == "centroid":
-                n = cl["count"]
-                sim = cosine(vec, [s / n for s in cl["sum"]])
+                centroids = np.array(
+                    [cl["sum"] / cl["count"] for cl in clusters], dtype=np.float64,
+                )
+                c_norms = np.linalg.norm(centroids, axis=1, keepdims=True)
+                c_norms[c_norms == 0] = 1.0
+                sims = centroids @ u / c_norms.ravel()
+                max_i = int(np.argmax(sims))
+                if sims[max_i] >= best_sim:
+                    best_sim = float(sims[max_i])
+                    best_idx = max_i
             else:
-                sim = max(cosine(vec, v) for v in cl["vecs"])
-            if sim >= best_sim:
-                best_sim = sim
-                best = cl
-        if best is None:
-            clusters.append({"ids": [id_], "vecs": [vec], "sum": list(vec), "count": 1})
+                for ci, cl in enumerate(clusters):
+                    member_unit = np.array(cl["units"], dtype=np.float64)
+                    sim = float(np.max(member_unit @ u))
+                    if sim >= best_sim:
+                        best_sim = sim
+                        best_idx = ci
+
+        if best_idx is None:
+            clusters.append({
+                "ids": [ids[idx]],
+                "units": [u.tolist()],
+                "sum": vecs[idx].copy(),
+                "count": 1,
+            })
         else:
-            best["ids"].append(id_)
-            best["vecs"].append(vec)
-            best["sum"] = [s + v for s, v in zip(best["sum"], vec, strict=False)]
-            best["count"] += 1
+            cl = clusters[best_idx]
+            cl["ids"].append(ids[idx])
+            cl["units"].append(u.tolist())
+            cl["sum"] = cl["sum"] + vecs[idx]
+            cl["count"] += 1
+
     return [cl["ids"] for cl in clusters]
