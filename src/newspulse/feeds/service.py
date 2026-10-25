@@ -8,6 +8,7 @@ we don't reprocess them. Reuses the existing summarizer/embedder/storage.
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -23,9 +24,11 @@ from newspulse.reports.embedder import Embedder
 from newspulse.reports.merger import ClusterMerger
 from newspulse.reports.pipeline import build_clusters, merge_clusters
 from newspulse.reports.render import write_product_report
-from newspulse.reports.summarizer import Summarizer
+from newspulse.reports.summarizer import ArticleSummary, Summarizer
 from newspulse.sources.extraction import extract_image
 from newspulse.storage import ObjectStorage
+
+MAX_WORKERS = 8
 
 
 class ArticleFetcher(BaseCollector):
@@ -138,6 +141,144 @@ def ingest_article(
         "status": "ingested" if result.is_product_related else "skipped_not_product",
         "product": result.is_product_related,
     }
+
+
+def _classify_one(
+    payload: dict,
+    summarizer: Summarizer,
+    fetcher: ArticleFetcher | None,
+) -> tuple[dict, ArticleSummary | None]:
+    """Classify a single article (thread-safe, no DB access)."""
+    url = payload.get("url")
+    if not url:
+        return payload, None
+    text, title, image = _content_for(payload, fetcher)
+    if not text:
+        return payload, None
+    payload = {**payload, "_title": title, "_image": image, "_text": text}
+    result = summarizer.summarize(title, text, [])
+    return payload, result
+
+
+def batch_ingest(
+    payloads: list[dict],
+    *,
+    session: Session,
+    storage: ObjectStorage,
+    summarizer: Summarizer,
+    embedder: Embedder | None = None,
+    fetcher: ArticleFetcher | None = None,
+    max_workers: int = MAX_WORKERS,
+) -> dict[str, int]:
+    """Ingest articles with concurrent LLM classification.
+
+    Phase 1: dedup by URL (fast, sequential DB check).
+    Phase 2: classify concurrently via thread pool (no DB).
+    Phase 3: store results sequentially (DB writes).
+    """
+    counts: dict[str, int] = {}
+
+    # Phase 1 — dedup
+    new_payloads: list[dict] = []
+    for p in payloads:
+        url = p.get("url")
+        if not url:
+            counts["no_url"] = counts.get("no_url", 0) + 1
+            continue
+        digest = content_hash(url)
+        if session.execute(select(RawItem.id).where(RawItem.content_hash == digest)).first():
+            counts["duplicate"] = counts.get("duplicate", 0) + 1
+            continue
+        new_payloads.append(p)
+
+    if not new_payloads:
+        return counts
+
+    # Phase 2 — concurrent LLM classification
+    classified: list[tuple[dict, ArticleSummary | None]] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_classify_one, p, summarizer, fetcher): p
+            for p in new_payloads
+        }
+        for future in as_completed(futures):
+            try:
+                payload, result = future.result()
+                classified.append((payload, result))
+            except Exception:
+                counts["error"] = counts.get("error", 0) + 1
+
+    # Phase 3 — sequential DB writes
+    for payload, result in classified:
+        url = payload["url"]
+        if result is None:
+            counts["no_content"] = counts.get("no_content", 0) + 1
+            continue
+        try:
+            digest = content_hash(url)
+            if session.execute(
+                select(RawItem.id).where(RawItem.content_hash == digest)
+            ).first():
+                counts["duplicate"] = counts.get("duplicate", 0) + 1
+                continue
+
+            title = payload.get("_title") or payload.get("title")
+            image = payload.get("_image") or payload.get("image_url")
+            text = payload.get("_text") or payload.get("content", "")
+            source_name = payload.get("source_name") or "NewsAPI"
+            root = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+            source = get_or_create_source(
+                session, source_name, root, "news", payload.get("region"),
+            )
+
+            stored = json.dumps(
+                {"url": url, "title": title, "body": text,
+                 "source": source_name, "image_url": image},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            raw_ref = storage.put(f"{digest}.json", stored)
+            raw = RawItem(
+                source_id=source.id, url=url, title=title,
+                content_hash=digest, raw_ref=raw_ref, image_url=image,
+                published_at=_parse_dt(payload.get("published_at")),
+            )
+            session.add(raw)
+            session.flush()
+
+            report = ArticleReport(
+                raw_item_id=raw.id,
+                is_product_related=result.is_product_related,
+                title=result.label or title,
+                summary=result.summary or None,
+                category=result.category or None,
+                sentiment=result.sentiment or None,
+                theme=result.theme or None,
+                event_types=result.event_types,
+                importance_score=result.importance_score or None,
+                country=result.country or None,
+                brands=result.brands,
+                companies=result.companies,
+                ingredients=result.ingredients,
+                products=result.products,
+                model=settings.mistral_model,
+            )
+            if result.is_product_related and embedder is not None:
+                report.embedding = embedder.embed(
+                    [result.summary or result.label or title or ""]
+                )[0]
+            session.add(report)
+            session.commit()
+
+            status = "ingested" if result.is_product_related else "skipped_not_product"
+            counts[status] = counts.get(status, 0) + 1
+        except Exception:
+            counts["error"] = counts.get("error", 0) + 1
+            try:
+                session.rollback()
+            except Exception:
+                pass
+
+    return counts
 
 
 def ingest_article_raw(

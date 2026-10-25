@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from newspulse.db import SessionLocal
 from newspulse.feeds.googlenews import GoogleNewsClient, GoogleNewsResolver
-from newspulse.feeds.service import ingest_article
+from newspulse.feeds.service import batch_ingest
 from newspulse.models import Source
 from newspulse.reports.embedder import MistralEmbedder
 from newspulse.reports.summarizer import MistralSummarizer
@@ -49,8 +49,10 @@ def fetch_site_search_sources(
     totals: dict[str, int] = {}
     source_results: list[dict] = []
 
+    # Phase 1 — collect payloads from all site-search sources (fast HTTP, no LLM)
+    all_payloads: list[dict] = []
     for src in sources:
-        src_stats: dict[str, int] = {}
+        src_count = 0
         try:
             domain = src.url.rstrip("/")
             if domain.startswith("http"):
@@ -64,41 +66,30 @@ def fetch_site_search_sources(
                 try:
                     final_url, html = resolver.resolve(item["gnews_url"])
                     if not html:
-                        src_stats["unresolved"] = src_stats.get("unresolved", 0) + 1
                         totals["unresolved"] = totals.get("unresolved", 0) + 1
                         continue
 
-                    payload = {
+                    all_payloads.append({
                         "url": final_url,
                         "title": item["title"],
                         "content": trafilatura.extract(html),
                         "image_url": extract_image(html),
                         "source_name": item["source_name"] or src.name,
                         "published_at": (
-                            item["published_at"].isoformat() if item["published_at"] else None
+                            item["published_at"].isoformat()
+                            if item["published_at"] else None
                         ),
                         "region": src.region,
-                    }
-                    res = ingest_article(
-                        payload, session=session, storage=storage,
-                        summarizer=summarizer, embedder=embedder, fetcher=None,
-                    )
-                    status = res["status"]
-                    src_stats[status] = src_stats.get(status, 0) + 1
-                    totals[status] = totals.get(status, 0) + 1
+                    })
+                    src_count += 1
                 except Exception:
-                    src_stats["error"] = src_stats.get("error", 0) + 1
-                    totals["error"] = totals.get("error", 0) + 1
-                    try:
-                        session.rollback()
-                    except Exception:
-                        pass
+                    totals["resolve_error"] = totals.get("resolve_error", 0) + 1
 
             src.last_success_at = datetime.now().astimezone()
             src.last_error = None
             session.commit()
             print(
-                f"[site-search] {src.name}: {len(items)} found | {src_stats}",
+                f"[site-search] {src.name}: {len(items)} found, {src_count} resolved",
                 flush=True,
             )
         except Exception as e:
@@ -107,11 +98,22 @@ def fetch_site_search_sources(
                 session.commit()
             except Exception:
                 session.rollback()
-            src_stats["feed_error"] = 1
             totals["feed_error"] = totals.get("feed_error", 0) + 1
             print(f"[site-search] {src.name}: ERROR - {e}", flush=True)
 
-        source_results.append({"source": src.name, "stats": src_stats})
+        source_results.append({"source": src.name, "resolved": src_count})
+
+    # Phase 2+3 — concurrent LLM classification + sequential DB writes
+    print(
+        f"[site-search] Classifying {len(all_payloads)} articles (8 concurrent)...",
+        flush=True,
+    )
+    batch_counts = batch_ingest(
+        all_payloads, session=session, storage=storage,
+        summarizer=summarizer, embedder=embedder,
+    )
+    for k, v in batch_counts.items():
+        totals[k] = totals.get(k, 0) + v
 
     resolver.close()
     client.close()

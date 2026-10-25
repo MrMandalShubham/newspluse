@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from newspulse.db import SessionLocal
-from newspulse.feeds.service import ingest_article
+from newspulse.feeds.service import batch_ingest
 from newspulse.models import Source
 from newspulse.reports.embedder import MistralEmbedder
 from newspulse.reports.summarizer import MistralSummarizer
@@ -193,8 +193,10 @@ def fetch_html_sources(
     totals: dict[str, int] = {}
     source_results: list[dict] = []
 
+    # Phase 1 — collect payloads from all HTML sources (fast HTTP, no LLM)
+    all_payloads: list[dict] = []
     for src in sources:
-        src_stats: dict[str, int] = {}
+        src_count = 0
         try:
             article_urls = _get_article_urls(src, client, limit=limit_per_source)
 
@@ -209,11 +211,10 @@ def fetch_html_sources(
                         pass
 
                     if not html:
-                        src_stats["fetch_fail"] = src_stats.get("fetch_fail", 0) + 1
                         totals["fetch_fail"] = totals.get("fetch_fail", 0) + 1
                         continue
 
-                    payload = {
+                    all_payloads.append({
                         "url": url,
                         "title": None,
                         "content": trafilatura.extract(html),
@@ -221,27 +222,16 @@ def fetch_html_sources(
                         "source_name": src.name,
                         "published_at": None,
                         "region": src.region,
-                    }
-                    res = ingest_article(
-                        payload, session=session, storage=storage,
-                        summarizer=summarizer, embedder=embedder, fetcher=None,
-                    )
-                    status = res["status"]
-                    src_stats[status] = src_stats.get(status, 0) + 1
-                    totals[status] = totals.get(status, 0) + 1
+                    })
+                    src_count += 1
                 except Exception:
-                    src_stats["error"] = src_stats.get("error", 0) + 1
-                    totals["error"] = totals.get("error", 0) + 1
-                    try:
-                        session.rollback()
-                    except Exception:
-                        pass
+                    totals["fetch_error"] = totals.get("fetch_error", 0) + 1
 
             src.last_success_at = datetime.now().astimezone()
             src.last_error = None
             session.commit()
             print(
-                f"[html_crawl] {src.name}: {len(article_urls)} links | {src_stats}",
+                f"[html_crawl] {src.name}: {len(article_urls)} links, {src_count} fetched",
                 flush=True,
             )
         except Exception as e:
@@ -250,11 +240,19 @@ def fetch_html_sources(
                 session.commit()
             except Exception:
                 session.rollback()
-            src_stats["crawl_error"] = 1
             totals["crawl_error"] = totals.get("crawl_error", 0) + 1
             print(f"[html_crawl] {src.name}: ERROR - {e}", flush=True)
 
-        source_results.append({"source": src.name, "stats": src_stats})
+        source_results.append({"source": src.name, "fetched": src_count})
+
+    # Phase 2+3 — concurrent LLM classification + sequential DB writes
+    print(f"[html_crawl] Classifying {len(all_payloads)} articles (8 concurrent)...", flush=True)
+    batch_counts = batch_ingest(
+        all_payloads, session=session, storage=storage,
+        summarizer=summarizer, embedder=embedder,
+    )
+    for k, v in batch_counts.items():
+        totals[k] = totals.get(k, 0) + v
 
     client.close()
     if own_session:

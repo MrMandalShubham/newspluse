@@ -19,7 +19,7 @@ import trafilatura
 
 from newspulse.db import SessionLocal
 from newspulse.feeds.googlenews import GoogleNewsClient, GoogleNewsResolver
-from newspulse.feeds.service import ingest_article
+from newspulse.feeds.service import batch_ingest
 from newspulse.reports.embedder import MistralEmbedder
 from newspulse.reports.merger import MistralMerger
 from newspulse.reports.pipeline import build_clusters, merge_clusters
@@ -73,6 +73,7 @@ def run_history(
     try:
         for w_start, w_end in weekly_windows(weeks, offset=offset):
             window = f"after:{w_start.isoformat()} before:{w_end.isoformat()}"
+            window_payloads: list[dict] = []
             for region, base_q in QUERIES:
                 try:
                     items = client.search(f"{base_q} {window}", limit=limit)
@@ -85,29 +86,30 @@ def run_history(
                         if not html:
                             totals["unresolved"] = totals.get("unresolved", 0) + 1
                             continue
-                        payload = {
+                        window_payloads.append({
                             "url": final_url,
                             "title": item["title"],
                             "content": trafilatura.extract(html),
                             "image_url": extract_image(html),
                             "source_name": item["source_name"],
                             "published_at": (
-                                item["published_at"].isoformat() if item["published_at"] else None
+                                item["published_at"].isoformat()
+                                if item["published_at"] else None
                             ),
                             "region": region,
-                        }
-                        res = ingest_article(
-                            payload, session=session, storage=storage,
-                            summarizer=summarizer, embedder=embedder, fetcher=None,
-                        )
-                        totals[res["status"]] = totals.get(res["status"], 0) + 1
-                    except Exception:  # noqa: BLE001 - transient (DB/network/LLM); skip one item
+                        })
+                    except Exception:  # noqa: BLE001 - transient; skip one item
                         totals["error"] = totals.get("error", 0) + 1
-                        try:
-                            session.rollback()
-                        except Exception:  # noqa: BLE001 - dead connection; next item reconnects
-                            pass
-                print(f"[{w_start}..{w_end}] {region}: {len(items)} items | {totals}", flush=True)
+                print(f"[{w_start}..{w_end}] {region}: {len(items)} items", flush=True)
+
+            if window_payloads:
+                batch_counts = batch_ingest(
+                    window_payloads, session=session, storage=storage,
+                    summarizer=summarizer, embedder=embedder,
+                )
+                for k, v in batch_counts.items():
+                    totals[k] = totals.get(k, 0) + v
+                print(f"[{w_start}..{w_end}] batch: {batch_counts}", flush=True)
 
         rebuild_stats = None
         if rebuild:

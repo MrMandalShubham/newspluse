@@ -11,7 +11,7 @@ import trafilatura
 
 from newspulse.db import SessionLocal
 from newspulse.feeds.googlenews import GoogleNewsClient, GoogleNewsResolver
-from newspulse.feeds.service import ingest_article, ingest_article_raw, maybe_rebuild
+from newspulse.feeds.service import batch_ingest, ingest_article_raw, maybe_rebuild
 from newspulse.reports.embedder import MistralEmbedder
 from newspulse.reports.merger import MistralMerger
 from newspulse.reports.summarizer import MistralSummarizer
@@ -37,6 +37,7 @@ def run_googlenews(
     counts: dict[str, int] = {}
     items = client.search(query, limit=limit)
     try:
+        all_payloads: list[dict] = []
         for item in items:
             final_url, html = resolver.resolve(item["gnews_url"])
             if not html:
@@ -54,12 +55,18 @@ def run_googlenews(
             }
             if raw:
                 result = ingest_article_raw(payload, session=session, storage=storage, fetcher=None)
+                counts[result["status"]] = counts.get(result["status"], 0) + 1
             else:
-                result = ingest_article(
-                    payload, session=session, storage=storage,
-                    summarizer=summarizer, embedder=embedder, fetcher=None,
-                )
-            counts[result["status"]] = counts.get(result["status"], 0) + 1
+                all_payloads.append(payload)
+
+        if not raw and all_payloads:
+            batch_counts = batch_ingest(
+                all_payloads, session=session, storage=storage,
+                summarizer=summarizer, embedder=embedder,
+            )
+            for k, v in batch_counts.items():
+                counts[k] = counts.get(k, 0) + v
+
         rebuild = None if raw else maybe_rebuild(session, MistralMerger(), storage=storage)
     finally:
         resolver.close()
