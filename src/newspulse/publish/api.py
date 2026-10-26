@@ -13,6 +13,7 @@ Endpoints:
     POST /api/news-pulse/webhooks/klaviyo     — Klaviyo → DO status sync
 """
 
+import hmac
 import logging
 import uuid
 from collections.abc import Iterator
@@ -335,7 +336,8 @@ def list_articles(
 
     if q:
         where_clauses.append("(a.headline ILIKE :q OR a.summary ILIKE :q)")
-        params["q"] = f"%{q}%"
+        escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params["q"] = f"%{escaped_q}%"
 
     where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -834,7 +836,7 @@ async def klaviyo_webhook(request: Request) -> dict:
     secret = settings.klaviyo_webhook_secret
     if secret:
         header_secret = request.headers.get("x-klaviyo-webhook-secret", "")
-        if header_secret != secret:
+        if not hmac.compare_digest(secret, header_secret):
             raise HTTPException(401, "invalid webhook secret")
 
     try:

@@ -18,6 +18,8 @@ import re
 
 from rapidfuzz import fuzz, process
 
+_MATCHER_ALLOWED_TABLES = frozenset({"companies", "ingredients"})
+
 # Brand-name variants -> canonical catalog spelling (extend as needed).
 BRAND_ALIASES = {
     "beauty of josen": "beauty of joseon",
@@ -110,6 +112,7 @@ class CatalogMatcher:
                 if row.brand_id is not None:
                     self._retail_by_brand.setdefault(row.brand_id, {}).setdefault(n, row.id)
         for kind, table in (("companies", "companies"), ("ingredients", "ingredients")):
+            assert table in _MATCHER_ALLOWED_TABLES, f"unexpected table: {table}"
             for row in self._conn.execute(text(f"select id, name from {table}")):
                 n = normalize(row.name)
                 if n:

@@ -75,6 +75,11 @@ MARKET_MAP = {
 _JUNCTIONS = ("news_article_brands", "news_article_companies",
               "news_article_ingredients", "news_article_products")
 
+_ALLOWED_ENTITY_TABLES = frozenset({
+    "brands", "companies", "ingredients", "products_master",
+    *_JUNCTIONS,
+})
+
 # LLM-extracted country name -> our region code (falls back to source region).
 COUNTRY_TO_REGION = {
     "south korea": "KR", "korea": "KR", "republic of korea": "KR", "kr": "KR",
@@ -196,6 +201,7 @@ def _product_id(conn, name, stats):
 
 
 def _lookup_id(conn, table, name):
+    assert table in _ALLOWED_ENTITY_TABLES, f"unexpected table: {table}"
     row = conn.execute(
         text(f"select id from {table} where lower(name)=lower(:n)"), {"n": name}
     ).first()
@@ -278,6 +284,7 @@ def _upsert_article(conn, d, market_id):
 
 
 def _link(conn, table, col, aid, eid):
+    assert table in _ALLOWED_ENTITY_TABLES, f"unexpected table: {table}"
     conn.execute(
         text(f"insert into {table}(article_id,{col}) values(:a,:e) on conflict do nothing"),
         {"a": aid, "e": eid},
@@ -863,6 +870,7 @@ def _create_product(conn, name: str) -> object:
 
 
 def _create_lookup(conn, table: str, name: str) -> object:
+    assert table in _ALLOWED_ENTITY_TABLES, f"unexpected table: {table}"
     eid = uuid.uuid4()
     conn.execute(
         text(f"insert into {table}(id,name,created_at) values(:id,:n, now())"),

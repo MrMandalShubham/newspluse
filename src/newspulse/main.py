@@ -4,7 +4,7 @@ Part 0.1 keeps this deliberately bare — just enough to prove the stack boots.
 The real /health endpoint arrives in Part 0.3; data endpoints in Phase 5.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
@@ -16,17 +16,32 @@ from newspulse.publish.api import router as news_pulse_router
 
 app = FastAPI(title=settings.app_name, version=__version__)
 
+_CORS_ORIGINS = [
+    "https://www.asiacosmepulse.com",
+    "https://asiacosmepulse.com",
+]
+if settings.app_env != "production":
+    _CORS_ORIGINS.append("http://localhost:3000")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://www.asiacosmepulse.com",
-        "https://asiacosmepulse.com",
-        "http://localhost:3000",
-    ],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Webhook-Secret",
+                   "X-Klaviyo-Webhook-Secret"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next) -> Response:
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
+
 
 app.include_router(router)
 app.include_router(news_pulse_router)
@@ -38,7 +53,6 @@ def root() -> dict[str, str]:
     return {
         "app": settings.app_name,
         "version": __version__,
-        "env": settings.app_env,
     }
 
 

@@ -1,5 +1,7 @@
 """Read-only delivery API — exposes trends, cards, and the report."""
 
+import hmac
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, select
@@ -164,7 +166,10 @@ def ingest_webhook(
     embedder: Embedder = Depends(get_embedder),
 ) -> dict:
     """Event-driven ingestion: relevance-gate one article, store if product news."""
-    if settings.webhook_secret and x_webhook_secret != settings.webhook_secret:
+    if settings.webhook_secret and (
+        not x_webhook_secret
+        or not hmac.compare_digest(settings.webhook_secret, x_webhook_secret)
+    ):
         raise HTTPException(status_code=401, detail="invalid webhook secret")
     return ingest_article(
         item.model_dump(),
