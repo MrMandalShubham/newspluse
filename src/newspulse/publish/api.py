@@ -416,7 +416,7 @@ def list_articles(
     q: str | None = Query(None, description="Search headline/summary"),
     sort: str = Query("recent", description="Sort: recent, importance, velocity"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=5000),
+    page_size: int | None = Query(None, ge=1, description="Results per page; omit for all"),
     session: Session = Depends(get_platform_session),
 ) -> ArticleListOut:
     where_clauses = []
@@ -466,17 +466,26 @@ def list_articles(
         text(f"SELECT count(DISTINCT a.id) {base}{where_sql}"), params,
     ).scalar()
 
-    offset = (page - 1) * page_size
-    rows = session.execute(text(
-        f"SELECT a.*, m.name as market_name, m.code as market_code "
-        f"{base} {where_sql} "
-        f"GROUP BY a.id, m.name, m.code "
-        f"ORDER BY {order} LIMIT :lim OFFSET :off"
-    ), {**params, "lim": page_size, "off": offset}).fetchall()
+    if page_size is None:
+        rows = session.execute(text(
+            f"SELECT a.*, m.name as market_name, m.code as market_code "
+            f"{base} {where_sql} "
+            f"GROUP BY a.id, m.name, m.code "
+            f"ORDER BY {order}"
+        ), params).fetchall()
+    else:
+        offset = (page - 1) * page_size
+        rows = session.execute(text(
+            f"SELECT a.*, m.name as market_name, m.code as market_code "
+            f"{base} {where_sql} "
+            f"GROUP BY a.id, m.name, m.code "
+            f"ORDER BY {order} LIMIT :lim OFFSET :off"
+        ), {**params, "lim": page_size, "off": offset}).fetchall()
 
     articles = _build_articles_batch(rows, session)
+    actual_page_size = page_size or total
 
-    return ArticleListOut(articles=articles, total=total, page=page, page_size=page_size)
+    return ArticleListOut(articles=articles, total=total, page=page, page_size=actual_page_size)
 
 
 @router.get("/articles/{slug}", response_model=ArticleOut)
