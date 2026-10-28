@@ -2,12 +2,27 @@
 
 Copy-paste the prompt below into Bolt to update the dashboard to show all markets dynamically.
 
+**Live API Base URL:** `https://lionfish-app-ldci4.ondigitalocean.app/api/news-pulse`
+
 ---
 
 ## Prompt
 
 ```
 We have added 3 new markets to the News Pulse backend. The dashboard's Market Coverage section must now show ALL markets from the database dynamically — not a hardcoded list.
+
+### Live API
+
+Base URL: https://lionfish-app-ldci4.ondigitalocean.app/api/news-pulse
+
+Key endpoints:
+- GET /api/news-pulse/markets — returns all markets with article counts
+- GET /api/news-pulse/articles?market=KR&limit=20 — articles filtered by market
+- GET /api/news-pulse/stories — stories with source articles
+- GET /api/news-pulse/topics — topic clusters
+- GET /api/news-pulse/brands — brands with article counts
+
+Use these API endpoints to fetch data. Do NOT connect directly to the database.
 
 ### What changed in the database
 

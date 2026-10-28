@@ -301,7 +301,7 @@ def list_articles(
     q: str | None = Query(None, description="Search headline/summary"),
     sort: str = Query("recent", description="Sort: recent, importance, velocity"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(50, ge=1, le=200),
     session: Session = Depends(get_platform_session),
 ) -> ArticleListOut:
     where_clauses = []

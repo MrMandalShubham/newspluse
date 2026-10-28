@@ -8,7 +8,7 @@ We have a `leads` table in our DigitalOcean platform database (`defaultdb`) and 
 
 ## API Reference
 
-Base URL: `https://<your-domain>/api/news-pulse`
+Base URL: `https://lionfish-app-ldci4.ondigitalocean.app/api/news-pulse`
 
 ### POST /api/news-pulse/leads — Create a Lead
 
@@ -271,7 +271,7 @@ function getUtmParams() {
 // Usage in form submit
 async function submitLead(formData) {
   const utm = getUtmParams();
-  const response = await fetch('/api/news-pulse/leads', {
+  const response = await fetch('https://lionfish-app-ldci4.ondigitalocean.app/api/news-pulse/leads', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -337,4 +337,4 @@ Indexes on: `email` (unique), `status`, `created_at`, `user_id`, `source`.
 | Report download gate | POST /api/news-pulse/leads | `download-report` |
 | Admin dashboard (/admin/leads) | GET + PATCH /api/news-pulse/leads | — |
 
-All forms write to the same `leads` table via the same API. The `source` field distinguishes where each lead came from. n8n (separate system) reads from this table and syncs to Klaviyo for email delivery.
+All forms write to the same `leads` table via the same API. The `source` field distinguishes where each lead came from. The backend automatically syncs new leads to Klaviyo for email delivery.
