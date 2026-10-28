@@ -291,6 +291,97 @@ def _build_article(row, session: Session) -> ArticleOut:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+class MarketCoverage(BaseModel):
+    code: str
+    name: str
+    article_count: int
+    percentage: float
+
+
+class MonthlyCount(BaseModel):
+    month: str
+    count: int
+
+
+class StatsOut(BaseModel):
+    total_articles: int
+    total_stories: int
+    total_brands: int
+    total_markets: int
+    monthly_history: list[MonthlyCount]
+    market_coverage: list[MarketCoverage]
+    signal_breakdown: dict[str, int]
+    avg_importance: float | None
+
+
+@router.get("/stats", response_model=StatsOut)
+def get_stats(
+    session: Session = Depends(get_platform_session),
+) -> StatsOut:
+    total_articles = session.execute(
+        text("SELECT count(*) FROM news_pulse_articles"),
+    ).scalar() or 0
+
+    total_stories = session.execute(
+        text("SELECT count(DISTINCT story_id) FROM news_pulse_articles WHERE story_id IS NOT NULL"),
+    ).scalar() or 0
+
+    total_brands = session.execute(
+        text("SELECT count(*) FROM brands"),
+    ).scalar() or 0
+
+    total_markets = session.execute(
+        text("SELECT count(*) FROM markets"),
+    ).scalar() or 0
+
+    monthly_rows = session.execute(text(
+        "SELECT to_char(date_trunc('month', published_at), 'YYYY-MM') as month, "
+        "count(*) as cnt "
+        "FROM news_pulse_articles "
+        "WHERE published_at >= now() - interval '12 months' "
+        "GROUP BY date_trunc('month', published_at) "
+        "ORDER BY date_trunc('month', published_at)"
+    )).fetchall()
+    monthly_history = [MonthlyCount(month=r.month, count=r.cnt) for r in monthly_rows]
+
+    market_rows = session.execute(text(
+        "SELECT m.code, m.name, count(a.id) as cnt, "
+        "round(count(a.id)::numeric / NULLIF(sum(count(a.id)) over(), 0) * 100, 1) as pct "
+        "FROM news_pulse_articles a "
+        "JOIN markets m ON a.market_id = m.id "
+        "GROUP BY m.code, m.name "
+        "ORDER BY cnt DESC"
+    )).fetchall()
+    market_coverage = [
+        MarketCoverage(code=r.code, name=r.name, article_count=r.cnt, percentage=float(r.pct or 0))
+        for r in market_rows
+    ]
+
+    signal_rows = session.execute(text(
+        "SELECT signal_tier, count(*) as cnt "
+        "FROM news_pulse_articles "
+        "WHERE signal_tier IS NOT NULL "
+        "GROUP BY signal_tier"
+    )).fetchall()
+    signal_breakdown = {r.signal_tier: r.cnt for r in signal_rows}
+
+    avg_imp = session.execute(text(
+        "SELECT round(avg(importance_score)::numeric, 1) FROM news_pulse_articles "
+        "WHERE importance_score IS NOT NULL"
+    )).scalar()
+
+    return StatsOut(
+        total_articles=total_articles,
+        total_stories=total_stories,
+        total_brands=total_brands,
+        total_markets=total_markets,
+        monthly_history=monthly_history,
+        market_coverage=market_coverage,
+        signal_breakdown=signal_breakdown,
+        avg_importance=float(avg_imp) if avg_imp else None,
+    )
+
+
 @router.get("/articles", response_model=ArticleListOut)
 def list_articles(
     brand: str | None = Query(None, description="Filter by brand slug"),
