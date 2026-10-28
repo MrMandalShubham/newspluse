@@ -237,54 +237,78 @@ class LeadListOut(BaseModel):
 
 def _build_article(row, session: Session) -> ArticleOut:
     """Build an ArticleOut from a raw SQL row, resolving linked entities."""
-    aid = row.id
+    return _build_articles_batch([row], session)[0]
 
-    brands = session.execute(text(
-        "SELECT b.id, b.name, b.slug FROM brands b "
-        "JOIN news_article_brands ab ON ab.brand_id = b.id "
-        "WHERE ab.article_id = :aid"
-    ), {"aid": aid}).fetchall()
 
-    products = session.execute(text(
-        "SELECT p.id, p.name, p.slug FROM products_master p "
-        "JOIN news_article_products ap ON ap.product_id = p.id "
-        "WHERE ap.article_id = :aid"
-    ), {"aid": aid}).fetchall()
+def _build_articles_batch(rows, session: Session) -> list[ArticleOut]:
+    """Build ArticleOut list with bulk entity loading (4 queries total)."""
+    if not rows:
+        return []
 
-    companies = session.execute(text(
-        "SELECT c.id, c.name, NULL as slug FROM companies c "
-        "JOIN news_article_companies ac ON ac.company_id = c.id "
-        "WHERE ac.article_id = :aid"
-    ), {"aid": aid}).fetchall()
+    aids = [r.id for r in rows]
+    aid_str = ",".join(f"'{a}'" for a in aids)
 
-    ingredients = session.execute(text(
-        "SELECT i.id, i.name, i.slug FROM ingredients i "
-        "JOIN news_article_ingredients ai ON ai.ingredient_id = i.id "
-        "WHERE ai.article_id = :aid"
-    ), {"aid": aid}).fetchall()
+    brands_map: dict = {}
+    for b in session.execute(text(
+        f"SELECT ab.article_id, b.id, b.name, b.slug FROM brands b "
+        f"JOIN news_article_brands ab ON ab.brand_id = b.id "
+        f"WHERE ab.article_id IN ({aid_str})"
+    )).fetchall():
+        brands_map.setdefault(b.article_id, []).append(
+            EntityRef(id=b.id, name=b.name, slug=b.slug))
 
-    return ArticleOut(
-        id=row.id,
-        slug=row.slug,
-        story_id=getattr(row, "story_id", None),
-        headline=row.headline,
-        summary=row.summary,
-        source=row.source,
-        source_tier=row.source_tier,
-        url=row.url,
-        image_url=row.image_url,
-        market=row.market_name,
-        market_code=row.market_code,
-        signal_tier=row.signal_tier,
-        topic_velocity=row.topic_velocity,
-        importance_score=row.importance_score,
-        event_types=row.event_types,
-        published_at=row.published_at,
-        brands=[EntityRef(id=b.id, name=b.name, slug=b.slug) for b in brands],
-        products=[EntityRef(id=p.id, name=p.name, slug=p.slug) for p in products],
-        companies=[EntityRef(id=c.id, name=c.name, slug=c.slug) for c in companies],
-        ingredients=[EntityRef(id=i.id, name=i.name, slug=i.slug) for i in ingredients],
-    )
+    products_map: dict = {}
+    for p in session.execute(text(
+        f"SELECT ap.article_id, p.id, p.name, p.slug FROM products_master p "
+        f"JOIN news_article_products ap ON ap.product_id = p.id "
+        f"WHERE ap.article_id IN ({aid_str})"
+    )).fetchall():
+        products_map.setdefault(p.article_id, []).append(
+            EntityRef(id=p.id, name=p.name, slug=p.slug))
+
+    companies_map: dict = {}
+    for c in session.execute(text(
+        f"SELECT ac.article_id, c.id, c.name, NULL as slug FROM companies c "
+        f"JOIN news_article_companies ac ON ac.company_id = c.id "
+        f"WHERE ac.article_id IN ({aid_str})"
+    )).fetchall():
+        companies_map.setdefault(c.article_id, []).append(
+            EntityRef(id=c.id, name=c.name, slug=c.slug))
+
+    ingredients_map: dict = {}
+    for i in session.execute(text(
+        f"SELECT ai.article_id, i.id, i.name, i.slug FROM ingredients i "
+        f"JOIN news_article_ingredients ai ON ai.ingredient_id = i.id "
+        f"WHERE ai.article_id IN ({aid_str})"
+    )).fetchall():
+        ingredients_map.setdefault(i.article_id, []).append(
+            EntityRef(id=i.id, name=i.name, slug=i.slug))
+
+    return [
+        ArticleOut(
+            id=row.id,
+            slug=row.slug,
+            story_id=getattr(row, "story_id", None),
+            headline=row.headline,
+            summary=row.summary,
+            source=row.source,
+            source_tier=row.source_tier,
+            url=row.url,
+            image_url=row.image_url,
+            market=row.market_name,
+            market_code=row.market_code,
+            signal_tier=row.signal_tier,
+            topic_velocity=row.topic_velocity,
+            importance_score=row.importance_score,
+            event_types=row.event_types,
+            published_at=row.published_at,
+            brands=brands_map.get(row.id, []),
+            products=products_map.get(row.id, []),
+            companies=companies_map.get(row.id, []),
+            ingredients=ingredients_map.get(row.id, []),
+        )
+        for row in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +416,7 @@ def list_articles(
     q: str | None = Query(None, description="Search headline/summary"),
     sort: str = Query("recent", description="Sort: recent, importance, velocity"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(50, ge=1, le=5000),
     session: Session = Depends(get_platform_session),
 ) -> ArticleListOut:
     where_clauses = []
@@ -450,7 +474,7 @@ def list_articles(
         f"ORDER BY {order} LIMIT :lim OFFSET :off"
     ), {**params, "lim": page_size, "off": offset}).fetchall()
 
-    articles = [_build_article(r, session) for r in rows]
+    articles = _build_articles_batch(rows, session)
 
     return ArticleListOut(articles=articles, total=total, page=page, page_size=page_size)
 
@@ -691,7 +715,7 @@ def get_topic(slug: str, session: Session = Depends(get_platform_session)) -> To
         "ORDER BY a.importance_score DESC NULLS LAST, a.published_at DESC NULLS LAST"
     ), {"cid": tc.id}).fetchall()
 
-    articles = [_build_article(r, session) for r in article_rows]
+    articles = _build_articles_batch(article_rows, session)
 
     return TopicClusterDetailOut(
         id=tc.id, name=tc.name, slug=tc.slug, description=tc.description,
