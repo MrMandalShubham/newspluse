@@ -13,6 +13,7 @@ import re
 import time
 import uuid
 from datetime import date, timedelta
+from urllib.parse import urlparse
 
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import OperationalError
@@ -116,6 +117,54 @@ def normalize_region(raw: str | None) -> str | None:
     if code in MARKET_MAP:
         return code
     return COUNTRY_TO_REGION.get(raw.strip().lower())
+
+
+# --- Domain-based market detection (fixes query-region mis-tagging) ----------
+# Country-code TLDs — the final segment of the hostname tells us the market.
+_CCTLD_MARKET: dict[str, str] = {
+    "kr": "KR", "jp": "JP", "cn": "CN", "th": "TH", "in": "IN",
+    "tw": "TW", "sg": "SG", "hk": "HK", "id": "ID", "my": "MY",
+    "au": "AU", "uk": "GB", "fr": "FR", "de": "DE", "it": "IT",
+}
+
+# .com / .net / .org publishers whose market is known (covers US/UK outlets
+# that get picked up by non-US Google News queries and then inherit the
+# query's market region, e.g. KR, instead of their actual market).
+_DOTCOM_PUBLISHER_MARKET: dict[str, str] = {
+    "nytimes.com": "US", "nypost.com": "US", "washingtonpost.com": "US",
+    "wsj.com": "US", "usatoday.com": "US", "cnn.com": "US",
+    "bloomberg.com": "US", "reuters.com": "US", "forbes.com": "US",
+    "businessinsider.com": "US", "aol.com": "US", "yahoo.com": "US",
+    "allure.com": "US", "byrdie.com": "US", "beautymatter.com": "US",
+    "cosmeticsdesign.com": "US", "happi.com": "US", "wwd.com": "US",
+    "harpersbazaar.com": "US", "vogue.com": "US", "elle.com": "US",
+    "glamour.com": "US", "refinery29.com": "US", "instyle.com": "US",
+    "cosmeticsdesign-asia.com": "US", "globalcosmeticsnews.com": "US",
+    "bbc.com": "GB", "theguardian.com": "GB", "telegraph.co.uk": "GB",
+    "dailymail.co.uk": "GB", "independent.co.uk": "GB",
+    "cosmeticsbusiness.com": "GB",
+    "scmp.com": "HK",
+    "straitstimes.com": "SG", "channelnewsasia.com": "SG",
+}
+
+
+def _domain_market(source_url: str | None) -> str | None:
+    """Derive market ISO code from a source's domain (ccTLD or known publisher)."""
+    if not source_url:
+        return None
+    try:
+        host = urlparse(source_url).netloc.replace("www.", "").lower()
+    except Exception:
+        return None
+    if not host:
+        return None
+    tld = host.rsplit(".", 1)[-1]
+    if tld in _CCTLD_MARKET:
+        return _CCTLD_MARKET[tld]
+    for pub_domain, market in _DOTCOM_PUBLISHER_MARKET.items():
+        if host == pub_domain or host.endswith("." + pub_domain):
+            return market
+    return None
 
 
 def _hybrid_importance(llm: int | None, size: int) -> int:
@@ -324,6 +373,7 @@ def _collect_rows(since: date | None = None) -> list[dict]:
                 "source_tier": _source_tier(src.trust_score),
                 "region": (
                     _country_to_region(ar.country)
+                    or _domain_market(src.url)
                     or normalize_region(src.region)
                     or src.region
                 ),
@@ -1026,7 +1076,11 @@ def _collect_clusters() -> list[dict]:
             urls: list[str] = []
             sources_seen: set[str] = set()
             for ar, ri, src in members:
-                region = _country_to_region(ar.country) or src.region
+                region = (
+                    _country_to_region(ar.country)
+                    or _domain_market(src.url)
+                    or src.region
+                )
                 if region:
                     countries[region] += 1
                 if ar.category:

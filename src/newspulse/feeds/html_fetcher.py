@@ -21,7 +21,7 @@ import trafilatura
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from newspulse.collectors.base import content_hash
+from newspulse.collectors.base import content_hash, safe_decode
 from newspulse.db import SessionLocal
 from newspulse.feeds.service import batch_ingest, known_urls
 from newspulse.models import Source
@@ -88,10 +88,10 @@ def _extract_links(html: str, base_url: str) -> list[str]:
     return result
 
 
-def _parse_sitemap(xml_text: str) -> tuple[list[str], list[str]]:
+def _parse_sitemap(xml_data: str | bytes) -> tuple[list[str], list[str]]:
     """Parse sitemap XML. Returns (article_urls, sub_sitemap_urls)."""
     try:
-        root = ET.fromstring(xml_text)
+        root = ET.fromstring(xml_data)
     except ET.ParseError:
         return [], []
 
@@ -135,7 +135,7 @@ def _fetch_sitemap_urls(
         except Exception:
             continue
 
-        articles, sub_sitemaps = _parse_sitemap(resp.text)
+        articles, sub_sitemaps = _parse_sitemap(resp.content)
         if articles:
             return articles[:limit]
 
@@ -143,7 +143,7 @@ def _fetch_sitemap_urls(
             try:
                 sub_resp = client.get(sub_url)
                 if sub_resp.status_code == 200:
-                    sub_articles, _ = _parse_sitemap(sub_resp.text)
+                    sub_articles, _ = _parse_sitemap(sub_resp.content)
                     articles.extend(sub_articles)
             except Exception:
                 continue
@@ -164,7 +164,7 @@ def _get_article_urls(
     try:
         resp = client.get(src.url)
         if resp.status_code == 200:
-            return _extract_links(resp.text, src.url)[:limit]
+            return _extract_links(safe_decode(resp), src.url)[:limit]
     except Exception:
         pass
 
@@ -243,7 +243,7 @@ def fetch_html_sources(
             try:
                 resp = client.get(url)
                 if resp.status_code == 200:
-                    return url, src, resp.text
+                    return url, src, safe_decode(resp)
             except Exception:
                 pass
             return url, src, None

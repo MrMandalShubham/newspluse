@@ -21,6 +21,23 @@ from pydantic import BaseModel, Field
 
 from newspulse.config import settings
 
+
+def safe_decode(resp: httpx.Response) -> str:
+    """Decode HTTP response, preferring UTF-8 when the server omits charset.
+
+    httpx falls back to Latin-1 per the HTTP spec when no charset header is
+    present, which garbles CJK (Korean/Chinese/Japanese) text.  This tries
+    UTF-8 first — correct for the vast majority of modern CJK pages — then
+    falls back to httpx's own detection.
+    """
+    ct = resp.headers.get("content-type", "")
+    if "charset=" in ct.lower():
+        return resp.text
+    try:
+        return resp.content.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return resp.text
+
 # HTTP statuses worth retrying (rate limit + transient server errors).
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 

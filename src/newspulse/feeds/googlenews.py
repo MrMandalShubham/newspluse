@@ -50,7 +50,7 @@ class GoogleNewsClient:
     ) -> list[dict]:
         resp = self._client.get(GN_RSS, params={"q": query, "hl": hl, "gl": gl, "ceid": ceid})
         resp.raise_for_status()
-        root = ET.fromstring(resp.text)
+        root = ET.fromstring(resp.content)
         items: list[dict] = []
         for item in root.findall(".//item"):
             link = item.findtext("link")

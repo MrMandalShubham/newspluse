@@ -19,7 +19,7 @@ import trafilatura
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from newspulse.collectors.base import content_hash
+from newspulse.collectors.base import content_hash, safe_decode
 from newspulse.db import SessionLocal
 from newspulse.feeds.service import batch_ingest, known_urls
 from newspulse.models import Source
@@ -49,10 +49,14 @@ def _parse_date(value: str | None) -> datetime | None:
         return None
 
 
-def _parse_feed(xml_text: str) -> list[dict]:
-    """Parse RSS 2.0, Atom, or RDF/RSS 1.0 feed XML into a list of article dicts."""
+def _parse_feed(xml_data: str | bytes) -> list[dict]:
+    """Parse RSS 2.0, Atom, or RDF/RSS 1.0 feed XML into a list of article dicts.
+
+    Accepts bytes (preferred — lets ElementTree honour the XML encoding
+    declaration, which is critical for EUC-KR / Shift_JIS / GB2312 feeds).
+    """
     try:
-        root = ET.fromstring(xml_text)
+        root = ET.fromstring(xml_data)
     except ET.ParseError:
         return []
 
@@ -151,7 +155,7 @@ def fetch_rss(
             if etag:
                 etags[feed_url] = etag
 
-        return _parse_feed(resp.text), True
+        return _parse_feed(resp.content), True
     except Exception:
         return [], True
     finally:
@@ -164,7 +168,7 @@ def _fetch_page(url: str, client: httpx.Client) -> tuple[str, str | None]:
     try:
         resp = client.get(url)
         if resp.status_code == 200:
-            return url, resp.text
+            return url, safe_decode(resp)
     except Exception:
         pass
     return url, None
