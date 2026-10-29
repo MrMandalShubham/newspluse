@@ -227,60 +227,19 @@ def normalize_source_regions(session: Session | None = None) -> dict:
     return {"fixed": fixed}
 
 
+# Google News site-search seeds were retired 2026-10-29: that method proved
+# redundant with the Step-1 broad-query path (the same publishers are already
+# ingested there, so dedicated site-searches dedup to ~0 net new). Only RSS /
+# html_crawl additions, which pull content the broad query misses, are kept.
 NEW_SOURCES: list[dict] = [
-    # --- Thailand (12 sources) ---
-    {"name": "cosmeticsdesign-asia.com", "url": "https://www.cosmeticsdesign-asia.com",
-     "region": "TH", "scraper_class": "google_news", "query": "Thailand beauty cosmetics"},
-    {"name": "nationthailand.com/beauty", "url": "https://www.nationthailand.com",
-     "region": "TH", "scraper_class": "google_news", "query": "beauty cosmetics skincare"},
-    {"name": "bangkokpost.com/beauty", "url": "https://www.bangkokpost.com",
-     "region": "TH", "scraper_class": "google_news", "query": "beauty cosmetics skincare"},
-    {"name": "lofficielthailand.com/beauty", "url": "https://www.lofficielthailand.com/category/beauty",
-     "region": "TH", "scraper_class": "google_news"},
     {"name": "dailyvanity.sg", "url": "https://dailyvanity.sg",
      "region": "TH", "scraper_class": "rss", "feed_url": "https://dailyvanity.sg/feed/"},
-    {"name": "praew.com", "url": "https://www.praew.com",
-     "region": "TH", "scraper_class": "google_news", "query": "beauty skincare"},
-    {"name": "beautrium.com", "url": "https://www.beautrium.com",
-     "region": "TH", "scraper_class": "google_news"},
-    {"name": "thairath.co.th/beauty", "url": "https://www.thairath.co.th",
-     "region": "TH", "scraper_class": "google_news", "query": "beauty cosmetics skincare"},
-    {"name": "prachachat.net/beauty", "url": "https://www.prachachat.net",
-     "region": "TH", "scraper_class": "google_news", "query": "beauty cosmetics"},
-    {"name": "mega-asia.com/beauty", "url": "https://mega-asia.com/beauty",
-     "region": "TH", "scraper_class": "google_news"},
-    {"name": "prestigeonline.com/th/beauty", "url": "https://www.prestigeonline.com/th/beauty-wellness/beauty",
-     "region": "TH", "scraper_class": "google_news"},
-    {"name": "tatlerasia.com/th/beauty", "url": "https://www.tatlerasia.com",
-     "region": "TH", "scraper_class": "google_news", "query": "Thailand beauty"},
-    # --- Korea (additional) ---
     {"name": "koreaproductpost.com", "url": "https://koreaproductpost.com",
      "region": "KR", "scraper_class": "rss", "feed_url": "https://koreaproductpost.com/feed/"},
     {"name": "koreabizwire.com", "url": "https://www.koreabizwire.com",
      "region": "KR", "scraper_class": "rss", "feed_url": "https://www.koreabizwire.com/feed"},
-    {"name": "koreaherald.com/beauty", "url": "https://www.koreaherald.com",
-     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics K-beauty"},
-    {"name": "koreatimes.co.kr/beauty", "url": "https://www.koreatimes.co.kr",
-     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics K-beauty"},
-    {"name": "en.yna.co.kr/beauty", "url": "https://en.yna.co.kr",
-     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics"},
-    {"name": "pulse.mk.co.kr/beauty", "url": "https://pulse.mk.co.kr",
-     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics"},
-    {"name": "kedglobal.com/beauty", "url": "https://www.kedglobal.com",
-     "region": "KR", "scraper_class": "google_news", "query": "beauty cosmetics"},
-    # --- Japan (additional) ---
-    {"name": "japantimes.co.jp/beauty", "url": "https://www.japantimes.co.jp",
-     "region": "JP", "scraper_class": "google_news", "query": "beauty cosmetics J-beauty"},
-    {"name": "nippon.com/beauty", "url": "https://www.nippon.com",
-     "region": "JP", "scraper_class": "google_news", "query": "beauty cosmetics"},
-    {"name": "japantoday.com/beauty", "url": "https://japantoday.com",
-     "region": "JP", "scraper_class": "google_news", "query": "beauty cosmetics skincare"},
-    {"name": "cosme.net", "url": "https://www.cosme.net",
-     "region": "JP", "scraper_class": "google_news"},
     {"name": "i-voce.jp", "url": "https://i-voce.jp",
      "region": "JP", "scraper_class": "html_crawl"},
-    {"name": "beauty-matome.net", "url": "https://beauty-matome.net",
-     "region": "JP", "scraper_class": "google_news"},
 ]
 
 
