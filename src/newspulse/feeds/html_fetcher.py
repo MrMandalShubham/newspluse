@@ -35,9 +35,12 @@ _FETCH_WORKERS = 10
 SITEMAP_NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
 _NAV_PATTERNS = re.compile(
     r"/(tag|category|author|page|login|signup|register|search|contact|about|privacy|terms"
-    r"|sitemap|rss|feed|cart|checkout|account|profile|faq|help)(/|$)",
+    r"|sitemap|rss|cart|checkout|account|profile|faq|help)(/|$)",
     re.IGNORECASE,
 )
+# A run of 4+ digits almost always marks an article ID (path or query), which
+# distinguishes real articles from nav/category/landing pages.
+_ARTICLE_ID = re.compile(r"\d{4,}")
 
 
 class _LinkExtractor(HTMLParser):
@@ -55,7 +58,15 @@ class _LinkExtractor(HTMLParser):
 
 
 def _extract_links(html: str, base_url: str) -> list[str]:
-    """Extract and resolve all links from an HTML page."""
+    """Extract and resolve article links from an HTML page.
+
+    Links carrying a numeric article ID (in the path or query string) are
+    returned first, so real articles are not crowded out by navigation and
+    category links — which appear earlier in the DOM — once the caller caps
+    the list. Query strings are kept only when they hold an article ID (e.g.
+    ``?idxno=20862``), so sites that key articles off the query string are not
+    all collapsed onto one id-less URL, while tracking params are dropped.
+    """
     parser = _LinkExtractor()
     try:
         parser.feed(html)
@@ -64,28 +75,37 @@ def _extract_links(html: str, base_url: str) -> list[str]:
 
     base_domain = urlparse(base_url).netloc.replace("www.", "")
     seen: set[str] = set()
-    result: list[str] = []
+    articles: list[str] = []  # id-bearing -> real articles
+    others: list[str] = []    # plausible but id-less -> listing/category pages
 
     for href in parser.links:
-        url = urljoin(base_url, href).split("#")[0].split("?")[0].rstrip("/")
-        if not url.startswith("http"):
+        parsed = urlparse(urljoin(base_url, href).split("#")[0])
+        if not parsed.scheme.startswith("http"):
             continue
-        domain = urlparse(url).netloc.replace("www.", "")
+        domain = parsed.netloc.replace("www.", "")
         if base_domain not in domain and domain not in base_domain:
             continue
+        path = parsed.path
+        has_query_id = bool(_ARTICLE_ID.search(parsed.query))
+        url = f"{parsed.scheme}://{parsed.netloc}{path}"
+        if has_query_id:
+            url = f"{url}?{parsed.query}"
+        url = url.rstrip("/")
         if url in seen or url == base_url.rstrip("/"):
             continue
-        path = urlparse(url).path
-        if len(path) < 5 or path.count("/") < 2:
+        if (len(path) < 5 or path.count("/") < 2) and not has_query_id:
             continue
         if _NAV_PATTERNS.search(path):
             continue
         if path.endswith((".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".pdf")):
             continue
         seen.add(url)
-        result.append(url)
+        if has_query_id or _ARTICLE_ID.search(path):
+            articles.append(url)
+        else:
+            others.append(url)
 
-    return result
+    return articles + others
 
 
 def _parse_sitemap(xml_data: str | bytes) -> tuple[list[str], list[str]]:

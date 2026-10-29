@@ -54,7 +54,7 @@ HTMLCRAWL_DOMAINS: set[str] = {
     "kao.co.jp",
     "nmpa.gov.cn",
     "pmda.go.jp",
-    "voce.jp",
+    "i-voce.jp",  # live VOCE domain (voce.jp is a dead shell — kept disabled)
 }
 
 DISABLED_DOMAINS: set[str] = {
@@ -277,7 +277,7 @@ NEW_SOURCES: list[dict] = [
      "region": "JP", "scraper_class": "google_news", "query": "beauty cosmetics skincare"},
     {"name": "cosme.net", "url": "https://www.cosme.net",
      "region": "JP", "scraper_class": "google_news"},
-    {"name": "voce.jp", "url": "https://voce.jp",
+    {"name": "i-voce.jp", "url": "https://i-voce.jp",
      "region": "JP", "scraper_class": "html_crawl"},
     {"name": "beauty-matome.net", "url": "https://beauty-matome.net",
      "region": "JP", "scraper_class": "google_news"},
