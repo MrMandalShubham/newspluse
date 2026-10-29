@@ -49,15 +49,39 @@ def _parse_date(value: str | None) -> datetime | None:
         return None
 
 
+def _recover_parse(xml_data: str | bytes):
+    """Lenient fallback for feeds that aren't strictly well-formed.
+
+    Some WordPress feeds embed raw article HTML with stray bytes (e.g. a CP1252
+    0xA0 in a UTF-8-declared document) or unescaped markup, which the strict
+    parser rejects wholesale. We drop invalid bytes and let lxml's recovering
+    parser salvage the item structure. Returns a root element or None.
+    """
+    try:
+        import lxml.etree as LET
+    except ImportError:
+        return None
+    raw = xml_data.encode("utf-8", "replace") if isinstance(xml_data, str) else xml_data
+    # Re-decode dropping invalid UTF-8, then re-encode so the bytes are clean.
+    clean = raw.decode("utf-8", "replace").encode("utf-8")
+    try:
+        return LET.fromstring(clean, parser=LET.XMLParser(recover=True, huge_tree=True))
+    except Exception:
+        return None
+
+
 def _parse_feed(xml_data: str | bytes) -> list[dict]:
     """Parse RSS 2.0, Atom, or RDF/RSS 1.0 feed XML into a list of article dicts.
 
     Accepts bytes (preferred — lets ElementTree honour the XML encoding
     declaration, which is critical for EUC-KR / Shift_JIS / GB2312 feeds).
+    Malformed feeds fall back to a lenient recovering parser.
     """
     try:
         root = ET.fromstring(xml_data)
     except ET.ParseError:
+        root = _recover_parse(xml_data)
+    if root is None:
         return []
 
     items: list[dict] = []

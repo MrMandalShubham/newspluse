@@ -64,3 +64,24 @@ def test_parse_invalid_xml():
 def test_parse_empty_feed():
     items = _parse_feed('<?xml version="1.0"?><rss><channel></channel></rss>')
     assert items == []
+
+
+def test_parse_malformed_feed_recovers():
+    """A UTF-8-declared feed containing a stray CP1252 byte (0xA0) still parses.
+
+    ElementTree rejects the whole document; the lenient fallback salvages the
+    items. Regression for dailyvanity.sg, which embedded a raw 0xA0 in article
+    HTML and silently yielded zero articles.
+    """
+    feed = (
+        b'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>'
+        b'<item><title>Ceramide\xa0Cream</title>'
+        b'<link>https://example.com/news/1</link>'
+        b'<description>Dry\xa0itchy skin</description></item>'
+        b'<item><title>Second</title><link>https://example.com/news/2</link></item>'
+        b'</channel></rss>'
+    )
+    items = _parse_feed(feed)
+    assert len(items) == 2
+    assert items[0]["url"] == "https://example.com/news/1"
+    assert items[1]["url"] == "https://example.com/news/2"
