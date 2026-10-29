@@ -83,3 +83,17 @@ sources:
       link_pattern: "/article/"
     extraction:
       method: readability
+
+  # --- Taiwan ---
+  - key: marieclairetw
+    name: Marie Claire Taiwan
+    url: https://www.marieclaire.com.tw
+    region: TW
+    type: news
+    trust_score: 0.5
+    discovery:
+      method: htmlcrawl
+      list_pages: ["/beauty"]
+      link_pattern: "/beauty/"
+    extraction:
+      method: readability
