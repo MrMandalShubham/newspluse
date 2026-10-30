@@ -586,6 +586,7 @@ def publish_to_platform(since: date | None = None) -> dict:
     stats: dict[str, int] = {
         "articles": 0, "brands_matched": 0, "brands_new": 0,
         "products_matched": 0, "products_new": 0, "markets_new": 0,
+        "product_brand_links": 0, "product_ingredient_links": 0,
     }
     if not data:
         try:
@@ -621,6 +622,42 @@ def publish_to_platform(since: date | None = None) -> dict:
                 text("SELECT id, lower(name) FROM ingredients"),
             ):
                 ingredient_cache[row[1]] = row[0]
+
+            # --- Retail SKUs grouped by brand (brand -> all its products) ---
+            brand_products: dict[object, list[object]] = {}
+            for row in conn.execute(text(
+                "SELECT brand_id, id FROM products_master "
+                "WHERE data_source IS DISTINCT FROM 'newspulse' AND brand_id IS NOT NULL"
+            )):
+                brand_products.setdefault(row[0], []).append(row[1])
+
+            # --- Retail products matched per article ingredient ---
+            # One scan of ingredients_text; substring-match each ingredient the
+            # batch mentions (>=4 chars, to skip over-broad tokens) in Python.
+            # A common ingredient (e.g. hyaluronic acid) appears in >1k products,
+            # so cap each ingredient to its highest-data-quality products instead
+            # of linking the article to every match.
+            INGREDIENT_LINK_CAP = 25
+            wanted_ings = {
+                n.strip().lower()
+                for d in data for n in (d["ingredients"] or [])
+                if len(n.strip()) >= 4
+            }
+            ingredient_products: dict[str, list[object]] = {i: [] for i in wanted_ings}
+            if wanted_ings:
+                # Rows pre-sorted by quality, so the first CAP matches kept per
+                # ingredient are its best products.
+                for row in conn.execute(text(
+                    "SELECT id, lower(ingredients_text) FROM products_master "
+                    "WHERE data_source IS DISTINCT FROM 'newspulse' "
+                    "AND ingredients_text IS NOT NULL "
+                    "ORDER BY coalesce(data_quality_score,0) DESC, is_best DESC NULLS LAST"
+                )):
+                    txt = row[1]
+                    for ing in wanted_ings:
+                        bucket = ingredient_products[ing]
+                        if len(bucket) < INGREDIENT_LINK_CAP and ing in txt:
+                            bucket.append(row[0])
 
             # --- Pre-fetch existing articles by URL (1 query) ---
             all_urls = [d["url"] for d in data]
@@ -755,6 +792,9 @@ def publish_to_platform(since: date | None = None) -> dict:
                         brand_cache[lname] = bid
                         stats["brands_new"] += 1
                     brand_links.append({"a": aid, "e": bid})
+                    for pid in brand_products.get(bid, ()):  # all retail SKUs of this brand
+                        product_links.append({"a": aid, "e": pid})
+                        stats["product_brand_links"] += 1
 
                 for name in _unique(d["companies"]):
                     lname = name.strip().lower()
@@ -787,6 +827,10 @@ def publish_to_platform(since: date | None = None) -> dict:
                         )
                         ingredient_cache[lname] = iid
                     ingredient_links.append({"a": aid, "e": iid})
+                    # retail products containing this ingredient
+                    for pid in ingredient_products.get(lname, ()):
+                        product_links.append({"a": aid, "e": pid})
+                        stats["product_ingredient_links"] += 1
 
                 for name in _unique(d["products"]):
                     lname = name.strip().lower()
@@ -844,6 +888,14 @@ def publish_to_platform(since: date | None = None) -> dict:
                     ingredient_links,
                 )
             if product_links:
+                # Brand + ingredient fan-out can repeat an (article, product)
+                # pair; dedup so the executemany stays small.
+                seen_pl: set[tuple] = set()
+                product_links = [
+                    pl for pl in product_links
+                    if (pl["a"], pl["e"]) not in seen_pl
+                    and not seen_pl.add((pl["a"], pl["e"]))
+                ]
                 conn.execute(
                     text(
                         "INSERT INTO news_article_products"
