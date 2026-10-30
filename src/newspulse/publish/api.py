@@ -3,6 +3,7 @@
 Endpoints:
     GET  /api/news-pulse/articles          — paginated list, filterable
     GET  /api/news-pulse/articles/{slug}   — single article by slug
+    GET  /api/news-pulse/product-intel     — articles with their linked retail products
     GET  /api/news-pulse/brands            — all brands with article counts
     GET  /api/news-pulse/markets           — all markets with article counts
     POST /api/news-pulse/leads             — capture a new lead
@@ -111,6 +112,41 @@ class ArticleOut(BaseModel):
 
 class ArticleListOut(BaseModel):
     articles: list[ArticleOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class ProductCardOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str | None = None
+    brand_name: str | None = None
+    primary_image_url: str | None = None
+    price_benchmark_usd: float | None = None
+    market_code: str | None = None
+    category_l1: str | None = None
+    source_url: str | None = None
+
+
+class ProductIntelItem(BaseModel):
+    id: uuid.UUID
+    slug: str | None
+    headline: str
+    summary: str | None
+    source: str | None
+    image_url: str | None
+    published_at: datetime | None
+    market: str | None = None
+    market_code: str | None = None
+    signal_tier: str | None = None
+    importance_score: int | None = None
+    sentiment: str | None = None
+    products: list[ProductCardOut] = []
+
+
+class ProductIntelListOut(BaseModel):
+    items: list[ProductIntelItem]
     total: int
     page: int
     page_size: int
@@ -499,6 +535,90 @@ def get_article(slug: str, session: Session = Depends(get_platform_session)) -> 
     if not row:
         raise HTTPException(status_code=404, detail="article not found")
     return _build_article(row, session)
+
+
+PRODUCT_INTEL_CAP = 12  # max product cards per article in the feed
+
+
+def _build_product_intel(rows, session: Session) -> list[ProductIntelItem]:
+    """Attach up to PRODUCT_INTEL_CAP retail product cards per article."""
+    if not rows:
+        return []
+    aids = [r.id for r in rows]
+    products_map: dict = {}
+    for p in session.execute(text(
+        "SELECT article_id, id, name, slug, brand_name, primary_image_url, "
+        "price_benchmark_usd, market_code, category_l1, source_url FROM ("
+        "  SELECT nap.article_id, p.id, p.name, p.slug, b.name AS brand_name, "
+        "    p.primary_image_url, p.price_benchmark_usd, p.market_code, p.source_url, "
+        "    (SELECT rp.category_l1 FROM retail_products rp "
+        "       WHERE rp.source_url = p.source_url LIMIT 1) AS category_l1, "
+        "    row_number() OVER (PARTITION BY nap.article_id ORDER BY "
+        "      coalesce(p.data_quality_score,0) DESC, p.is_best DESC NULLS LAST) AS rn "
+        "  FROM news_article_products nap "
+        "  JOIN products_master p ON p.id = nap.product_id "
+        "    AND p.data_source IS DISTINCT FROM 'newspulse' "
+        "  LEFT JOIN brands b ON b.id = p.brand_id "
+        "  WHERE nap.article_id = ANY(:aids)"
+        ") t WHERE rn <= :cap"
+    ), {"aids": aids, "cap": PRODUCT_INTEL_CAP}).fetchall():
+        products_map.setdefault(p.article_id, []).append(ProductCardOut(
+            id=p.id, name=p.name, slug=p.slug, brand_name=p.brand_name,
+            primary_image_url=p.primary_image_url,
+            price_benchmark_usd=p.price_benchmark_usd, market_code=p.market_code,
+            category_l1=p.category_l1, source_url=p.source_url,
+        ))
+    return [
+        ProductIntelItem(
+            id=r.id, slug=r.slug, headline=r.headline, summary=r.summary,
+            source=r.source, image_url=r.image_url, published_at=r.published_at,
+            market=r.market_name, market_code=r.market_code,
+            signal_tier=r.signal_tier, importance_score=r.importance_score,
+            sentiment=r.sentiment, products=products_map.get(r.id, []),
+        )
+        for r in rows
+    ]
+
+
+@router.get("/product-intel", response_model=ProductIntelListOut)
+def product_intel(
+    markets: str | None = Query(None, description="Comma-separated market codes to gate by"),
+    sort: str = Query("recent", description="Sort: recent, importance, velocity"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_platform_session),
+) -> ProductIntelListOut:
+    """Article-centric feed: only articles that link to >=1 retail product,
+    each with its top product cards."""
+    params: dict = {}
+    where = [
+        "EXISTS (SELECT 1 FROM news_article_products nap "
+        "JOIN products_master p ON p.id = nap.product_id "
+        "AND p.data_source IS DISTINCT FROM 'newspulse' "
+        "WHERE nap.article_id = a.id)"
+    ]
+    if markets:
+        codes = [c.strip().upper() for c in markets.split(",") if c.strip()]
+        if codes:
+            where.append("m.code = ANY(:codes)")
+            params["codes"] = codes
+    where_sql = " WHERE " + " AND ".join(where)
+    order = {
+        "recent": "a.published_at DESC NULLS LAST",
+        "importance": "a.importance_score DESC NULLS LAST, a.published_at DESC NULLS LAST",
+        "velocity": "a.topic_velocity DESC NULLS LAST, a.published_at DESC NULLS LAST",
+    }.get(sort, "a.published_at DESC NULLS LAST")
+    base = "FROM news_pulse_articles a JOIN markets m ON a.market_id = m.id"
+    total = session.execute(text(f"SELECT count(*) {base}{where_sql}"), params).scalar()
+    offset = (page - 1) * page_size
+    rows = session.execute(text(
+        f"SELECT a.*, m.name AS market_name, m.code AS market_code "
+        f"{base}{where_sql} ORDER BY {order} LIMIT :lim OFFSET :off"
+    ), {**params, "lim": page_size, "off": offset}).fetchall()
+    return ProductIntelListOut(
+        items=_build_product_intel(rows, session),
+        total=total, page=page, page_size=page_size,
+    )
 
 
 @router.get("/brands", response_model=list[BrandOut])
