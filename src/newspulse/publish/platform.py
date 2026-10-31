@@ -990,8 +990,34 @@ def refresh_platform_signals(batch: int = 100, since: date | None = None) -> dic
 
 
 def backfill_translations(batch: int = 200) -> dict:
-    """One-time backfill: set headline_original + language on existing articles."""
-    data = _collect_rows()
+    """One-time backfill: set headline_original + language on existing articles.
+
+    Lightweight: single query on working DB (no per-row cluster lookups).
+    """
+    work = SessionLocal()
+    try:
+        rows = work.execute(
+            select(ArticleReport.title, RawItem.url, RawItem.title, Source.url, Source.region, ArticleReport.country)
+            .join(RawItem, RawItem.id == ArticleReport.raw_item_id)
+            .join(Source, Source.id == RawItem.source_id)
+            .where(ArticleReport.is_product_related.is_(True))
+        ).all()
+        data = []
+        for ar_title, ri_url, ri_title, src_url, src_region, ar_country in rows:
+            region = (
+                _country_to_region(ar_country)
+                or _domain_market(src_url)
+                or normalize_region(src_region)
+                or src_region
+            )
+            lang = REGION_TO_LANG.get(region, "en") if region else "en"
+            headline_en = ar_title or ri_title or ri_url
+            headline_orig = ri_title if ri_title and ri_title != headline_en else None
+            data.append({"u": ri_url, "ho": headline_orig, "lang": lang})
+    finally:
+        work.close()
+    print(f"[backfill] loaded {len(data)} articles from working DB", flush=True)
+
     plat = create_engine(settings.publish_database_url, pool_pre_ping=True)
     updated = 0
     try:
@@ -1016,13 +1042,10 @@ def backfill_translations(batch: int = 200) -> dict:
                                     "SET headline_original=:ho, language=:lang "
                                     "WHERE url=:u"
                                 ),
-                                {
-                                    "ho": d.get("headline_original"),
-                                    "lang": d.get("language", "en"),
-                                    "u": d["url"],
-                                },
+                                d,
                             )
                     updated += len(chunk)
+                    print(f"[backfill] {updated}/{len(data)}", flush=True)
                     break
                 except OperationalError:
                     if attempt == 3:
