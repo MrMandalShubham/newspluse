@@ -997,7 +997,10 @@ def backfill_translations(batch: int = 200) -> dict:
     work = SessionLocal()
     try:
         rows = work.execute(
-            select(ArticleReport.title, RawItem.url, RawItem.title, Source.url, Source.region, ArticleReport.country)
+            select(
+                ArticleReport.title, RawItem.url, RawItem.title,
+                Source.url, Source.region, ArticleReport.country,
+            )
             .join(RawItem, RawItem.id == ArticleReport.raw_item_id)
             .join(Source, Source.id == RawItem.source_id)
             .where(ArticleReport.is_product_related.is_(True))
