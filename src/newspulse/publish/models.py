@@ -90,7 +90,9 @@ class NewsPulseArticle(Base):
     slug: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     story_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     headline: Mapped[str] = mapped_column(Text)
+    headline_original: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
     market_id: Mapped[uuid.UUID | None] = mapped_column(

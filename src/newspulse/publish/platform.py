@@ -103,6 +103,13 @@ COUNTRY_TO_REGION = {
 }
 
 
+REGION_TO_LANG: dict[str, str] = {
+    "KR": "ko", "JP": "ja", "CN": "zh", "TW": "zh", "TH": "th",
+    "IN": "en", "US": "en", "GB": "en", "HK": "zh", "SG": "en",
+    "ID": "id", "MY": "en", "AU": "en", "FR": "fr", "EU": "en",
+}
+
+
 def _country_to_region(country: str | None) -> str | None:
     if not country:
         return None
@@ -292,7 +299,11 @@ def _upsert_article(conn, d, market_id):
         conn, d["headline"], d["published_at"], d.get("story_id"),
     )
     fields = {
-        "headline": d["headline"], "summary": d["summary"], "source": d["source"],
+        "headline": d["headline"],
+        "headline_original": d.get("headline_original"),
+        "summary": d["summary"],
+        "language": d.get("language", "en"),
+        "source": d["source"],
         "source_tier": d["source_tier"], "market_id": market_id, "category": d["category"],
         "sentiment": d["sentiment"], "theme": d["theme"], "reach": None,
         "image_url": d.get("image_url"),
@@ -308,7 +319,9 @@ def _upsert_article(conn, d, market_id):
     if row:
         aid = row[0]
         conn.execute(
-            text("update news_pulse_articles set headline=:headline, summary=:summary, "
+            text("update news_pulse_articles set headline=:headline, "
+                 "headline_original=:headline_original, "
+                 "summary=:summary, language=:language, "
                  "source=:source, source_tier=:source_tier, market_id=:market_id, "
                  "category=:category, sentiment=:sentiment, theme=:theme, reach=:reach, "
                  "image_url=:image_url, published_at=:published_at, signal_tier=:signal_tier, "
@@ -319,10 +332,12 @@ def _upsert_article(conn, d, market_id):
     else:
         aid = uuid.uuid4()
         conn.execute(
-            text("insert into news_pulse_articles(id,slug,story_id,url,headline,summary,source,"
+            text("insert into news_pulse_articles(id,slug,story_id,url,headline,"
+                 "headline_original,summary,language,source,"
                  "source_tier,market_id,category,sentiment,theme,reach,image_url,published_at,"
                  "signal_tier,topic_velocity,importance_score,event_types,created_at) values("
-                 ":id,:slug,:story_id,:url,:headline,:summary,:source,:source_tier,:market_id,"
+                 ":id,:slug,:story_id,:url,:headline,"
+                 ":headline_original,:summary,:language,:source,:source_tier,:market_id,"
                  ":category,:sentiment,:theme,:reach,:image_url,:published_at,:signal_tier,"
                  ":topic_velocity,:importance_score,cast(:event_types as jsonb), now())"),
             {**fields, "id": aid, "url": d["url"], "slug": article_slug(d["headline"], aid)},
@@ -366,17 +381,23 @@ def _collect_rows(since: date | None = None) -> list[dict]:
                 if cluster:
                     size = cluster.size
                     story_id = f"story-{cluster.id}"
+            region = (
+                _country_to_region(ar.country)
+                or _domain_market(src.url)
+                or normalize_region(src.region)
+                or src.region
+            )
+            lang = REGION_TO_LANG.get(region, "en") if region else "en"
+            headline_en = ar.title or ri.title or ri.url
+            headline_orig = ri.title if ri.title and ri.title != headline_en else None
             out.append({
-                "url": ri.url, "headline": ar.title or ri.title or ri.url,
+                "url": ri.url, "headline": headline_en,
+                "headline_original": headline_orig,
+                "language": lang,
                 "image_url": ri.image_url,
                 "summary": ar.summary, "source": src.name,
                 "source_tier": _source_tier(src.trust_score),
-                "region": (
-                    _country_to_region(ar.country)
-                    or _domain_market(src.url)
-                    or normalize_region(src.region)
-                    or src.region
-                ),
+                "region": region,
                 "category": ar.category, "sentiment": ar.sentiment, "theme": ar.theme,
                 "event_types": ar.event_types,
                 "importance_score": _hybrid_importance(ar.importance_score, size),
@@ -570,6 +591,14 @@ def publish_to_platform(since: date | None = None) -> dict:
             text("ALTER TABLE news_pulse_articles ADD COLUMN IF NOT EXISTS story_id TEXT")
         )
         conn.execute(
+            text("ALTER TABLE news_pulse_articles "
+                 "ADD COLUMN IF NOT EXISTS headline_original TEXT")
+        )
+        conn.execute(
+            text("ALTER TABLE news_pulse_articles "
+                 "ADD COLUMN IF NOT EXISTS language VARCHAR(10)")
+        )
+        conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_news_pulse_articles_story_id "
                  "ON news_pulse_articles(story_id)")
         )
@@ -713,7 +742,10 @@ def publish_to_platform(since: date | None = None) -> dict:
 
                 story_id = d.get("story_id")
                 fields = {
-                    "headline": d["headline"], "summary": d["summary"],
+                    "headline": d["headline"],
+                    "headline_original": d.get("headline_original"),
+                    "summary": d["summary"],
+                    "language": d.get("language", "en"),
                     "source": d["source"], "source_tier": d["source_tier"],
                     "market_id": market_id, "category": d["category"],
                     "sentiment": d["sentiment"], "theme": d["theme"],
@@ -732,7 +764,9 @@ def publish_to_platform(since: date | None = None) -> dict:
                     conn.execute(
                         text(
                             "UPDATE news_pulse_articles SET "
-                            "headline=:headline, summary=:summary, "
+                            "headline=:headline, "
+                            "headline_original=:headline_original, "
+                            "summary=:summary, language=:language, "
                             "source=:source, source_tier=:source_tier, "
                             "market_id=:market_id, category=:category, "
                             "sentiment=:sentiment, theme=:theme, "
@@ -751,12 +785,15 @@ def publish_to_platform(since: date | None = None) -> dict:
                     conn.execute(
                         text(
                             "INSERT INTO news_pulse_articles"
-                            "(id,slug,story_id,url,headline,summary,source,"
-                            "source_tier,market_id,category,sentiment,theme,"
-                            "reach,image_url,published_at,signal_tier,"
-                            "topic_velocity,importance_score,event_types,"
+                            "(id,slug,story_id,url,headline,"
+                            "headline_original,summary,language,"
+                            "source,source_tier,market_id,category,"
+                            "sentiment,theme,reach,image_url,"
+                            "published_at,signal_tier,topic_velocity,"
+                            "importance_score,event_types,"
                             "created_at) VALUES("
-                            ":id,:slug,:story_id,:url,:headline,:summary,"
+                            ":id,:slug,:story_id,:url,:headline,"
+                            ":headline_original,:summary,:language,"
                             ":source,:source_tier,:market_id,:category,"
                             ":sentiment,:theme,:reach,:image_url,"
                             ":published_at,:signal_tier,:topic_velocity,"
@@ -950,6 +987,50 @@ def refresh_platform_signals(batch: int = 100, since: date | None = None) -> dic
     finally:
         plat.dispose()
     return {"updated": updated}
+
+
+def backfill_translations(batch: int = 200) -> dict:
+    """One-time backfill: set headline_original + language on existing articles."""
+    data = _collect_rows()
+    plat = create_engine(settings.publish_database_url, pool_pre_ping=True)
+    updated = 0
+    try:
+        with plat.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE news_pulse_articles "
+                     "ADD COLUMN IF NOT EXISTS headline_original TEXT")
+            )
+            conn.execute(
+                text("ALTER TABLE news_pulse_articles "
+                     "ADD COLUMN IF NOT EXISTS language VARCHAR(10)")
+            )
+        for i in range(0, len(data), batch):
+            chunk = data[i:i + batch]
+            for attempt in range(4):
+                try:
+                    with plat.begin() as conn:
+                        for d in chunk:
+                            conn.execute(
+                                text(
+                                    "UPDATE news_pulse_articles "
+                                    "SET headline_original=:ho, language=:lang "
+                                    "WHERE url=:u"
+                                ),
+                                {
+                                    "ho": d.get("headline_original"),
+                                    "lang": d.get("language", "en"),
+                                    "u": d["url"],
+                                },
+                            )
+                    updated += len(chunk)
+                    break
+                except OperationalError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(2 ** attempt)
+    finally:
+        plat.dispose()
+    return {"total": len(data), "updated": updated}
 
 
 def _create_brand(conn, name: str) -> object:

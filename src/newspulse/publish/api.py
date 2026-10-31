@@ -92,7 +92,9 @@ class ArticleOut(BaseModel):
     slug: str | None
     story_id: str | None = None
     headline: str
+    headline_original: str | None = None
     summary: str | None
+    language: str | None = None
     source: str | None
     source_tier: str | None
     url: str
@@ -326,7 +328,9 @@ def _build_articles_batch(rows, session: Session) -> list[ArticleOut]:
             slug=row.slug,
             story_id=getattr(row, "story_id", None),
             headline=row.headline,
+            headline_original=getattr(row, "headline_original", None),
             summary=row.summary,
+            language=getattr(row, "language", None),
             source=row.source,
             source_tier=row.source_tier,
             url=row.url,
