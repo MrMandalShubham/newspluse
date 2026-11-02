@@ -11,7 +11,7 @@ import json
 import sys
 import tempfile
 import time
-from datetime import date, datetime
+from datetime import date
 
 import httpx
 from sqlalchemy import create_engine, text
@@ -265,7 +265,6 @@ def _render_premium_html(digest: dict, *, for_pdf: bool = False) -> str:
             if prods_html:
                 prods_html = f"<div style='margin-bottom:12px'>{prods_html}</div>"
             market = a.get("market", "")
-            market_bg = _CAT_COLORS.get(cat, "#eff6ff")
             articles_html += (
                 f"<div style='background:#fff;border-radius:10px;border:1px solid #e2e8f0;"
                 f"overflow:hidden;border-left:3px solid {cat_color};margin-bottom:14px'>"
