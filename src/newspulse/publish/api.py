@@ -6,19 +6,20 @@ Endpoints:
     GET  /api/news-pulse/product-intel     — articles with their linked retail products
     GET  /api/news-pulse/brands            — all brands with article counts
     GET  /api/news-pulse/markets           — all markets with article counts
+    GET  /api/news-pulse/digest            — top 7 articles for weekly email digest
     POST /api/news-pulse/leads             — capture a new lead
     GET  /api/news-pulse/leads             — list leads (admin)
     GET  /api/news-pulse/leads/{id}        — single lead
     PATCH /api/news-pulse/leads/{id}       — update lead status
-    POST /api/news-pulse/webhooks/lead-event  — Vercel frontend → Klaviyo sync
-    POST /api/news-pulse/webhooks/klaviyo     — Klaviyo → DO status sync
+    POST /api/news-pulse/webhooks/lead-event  — Vercel frontend -> Klaviyo sync
+    POST /api/news-pulse/webhooks/klaviyo     — Klaviyo -> DO status sync
 """
 
 import hmac
 import logging
 import uuid
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -653,6 +654,53 @@ def list_markets(
         "ORDER BY cnt DESC"
     )).fetchall()
     return [MarketOut(code=r.code, name=r.name, article_count=r.cnt) for r in rows]
+
+
+class DigestArticleOut(BaseModel):
+    headline: str
+    summary: str | None = None
+    category: str | None = None
+    market: str | None = None
+    url: str
+    importance_score: int | None = None
+    published_at: datetime | None = None
+
+
+class DigestOut(BaseModel):
+    week_of: str
+    articles: list[DigestArticleOut]
+
+
+@router.get("/digest", response_model=DigestOut)
+def weekly_digest(
+    session: Session = Depends(get_platform_session),
+) -> DigestOut:
+    rows = session.execute(text(
+        "SELECT a.headline, a.summary, a.category, a.url, "
+        "a.importance_score, a.published_at, m.name AS market_name "
+        "FROM news_pulse_articles a "
+        "JOIN markets m ON a.market_id = m.id "
+        "WHERE a.published_at >= now() - interval '7 days' "
+        "AND coalesce(a.importance_score, 0) > 3 "
+        "ORDER BY a.importance_score DESC NULLS LAST, "
+        "a.published_at DESC NULLS LAST "
+        "LIMIT 7"
+    )).fetchall()
+    return DigestOut(
+        week_of=date.today().isoformat(),
+        articles=[
+            DigestArticleOut(
+                headline=r.headline,
+                summary=r.summary,
+                category=r.category,
+                market=r.market_name,
+                url=r.url,
+                importance_score=r.importance_score,
+                published_at=r.published_at,
+            )
+            for r in rows
+        ],
+    )
 
 
 @router.get("/stories", response_model=StoryListOut)
