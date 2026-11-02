@@ -199,8 +199,8 @@ _CAT_COLORS = {
 }
 
 
-def _render_premium_html(digest: dict) -> str:
-    """Render the editorial 'NewsPulse Weekly Beauty Intel Digest' as print-ready HTML."""
+def _render_premium_html(digest: dict, *, for_pdf: bool = False) -> str:
+    """Render the editorial digest. When for_pdf=True, skip external images for small file size."""
     week = digest.get("week", "")
     today = date.today().strftime("%B %d, %Y")
     summary = digest.get("executive_summary", "")
@@ -229,24 +229,26 @@ def _render_premium_html(digest: dict) -> str:
             f"<div style='flex:1;height:1px;background:#e2e8f0'></div></div>"
         )
         for a in items:
-            img_url = a.get("image_url") or ""
             img_html = ""
-            if img_url and img_url.startswith(("https://", "http://")):
-                img_html = (
-                    f"<img src='{img_url}' style='width:100%;max-height:140px;"
-                    f"object-fit:cover;display:block' alt=''>"
-                )
+            if not for_pdf:
+                img_url = a.get("image_url") or ""
+                if img_url and img_url.startswith(("https://", "http://")):
+                    img_html = (
+                        f"<img src='{img_url}' style='width:100%;max-height:140px;"
+                        f"object-fit:cover;display:block' alt=''>"
+                    )
             impact = a.get("impact", "HIGH")
             impact_bg = "#dc2626" if impact == "HIGH" else "#f59e0b"
             prods_html = ""
             for p in (a.get("products") or [])[:2]:
-                p_url = p.get("image_url") or ""
                 p_img = ""
-                if p_url and p_url.startswith(("https://", "http://")):
-                    p_img = (
-                        f"<img src='{p_url}' style='width:24px;height:24px;"
-                        f"border-radius:4px;object-fit:cover' alt=''>"
-                    )
+                if not for_pdf:
+                    p_url = p.get("image_url") or ""
+                    if p_url and p_url.startswith(("https://", "http://")):
+                        p_img = (
+                            f"<img src='{p_url}' style='width:24px;height:24px;"
+                            f"border-radius:4px;object-fit:cover' alt=''>"
+                        )
                 brand = p.get("brand_name") or ""
                 brand_html = (
                     f"<div style='font-size:10px;color:#94a3b8'>{brand}</div>"
@@ -393,30 +395,7 @@ def _generate_pdf(html: str) -> bytes:
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 680, "height": 960})
-        page.goto(f"file://{html_path}", wait_until="networkidle")
-        # Downscale all images to max 400px wide JPEG-quality via canvas
-        page.evaluate("""() => {
-            const imgs = document.querySelectorAll('img');
-            const promises = Array.from(imgs).map(img => new Promise(resolve => {
-                if (!img.complete) { img.onload = () => resolve(img); img.onerror = resolve; }
-                else resolve(img);
-            }));
-            return Promise.all(promises).then(loaded => {
-                loaded.forEach(img => {
-                    if (!(img instanceof HTMLImageElement) || !img.naturalWidth) return;
-                    const maxW = 400;
-                    const scale = Math.min(1, maxW / img.naturalWidth);
-                    const w = Math.round(img.naturalWidth * scale);
-                    const h = Math.round(img.naturalHeight * scale);
-                    const c = document.createElement('canvas');
-                    c.width = w; c.height = h;
-                    const ctx = c.getContext('2d');
-                    ctx.drawImage(img, 0, 0, w, h);
-                    try { img.src = c.toDataURL('image/jpeg', 0.6); } catch(e) {}
-                });
-            });
-        }""")
-        page.wait_for_timeout(500)
+        page.goto(f"file://{html_path}", wait_until="load")
         pdf_bytes = page.pdf(
             format="A4",
             print_background=True,
@@ -506,7 +485,7 @@ def generate_digest() -> dict:
 
     print("[digest] Step 4/4: Generating premium PDF...", flush=True)
     try:
-        premium_html = _render_premium_html(digest)
+        premium_html = _render_premium_html(digest, for_pdf=True)
         pdf_bytes = _generate_pdf(premium_html)
         today_str = date.today().isoformat()
         pdf_key = f"digests/NewsPulse_Weekly_Digest_{week}_{today_str}.pdf"
