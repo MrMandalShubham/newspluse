@@ -9,8 +9,9 @@ Designed to run every Monday via GitHub Actions.
 
 import json
 import sys
+import tempfile
 import time
-from datetime import date
+from datetime import date, datetime
 
 import httpx
 from sqlalchemy import create_engine, text
@@ -189,6 +190,218 @@ def _render_html(digest: dict) -> str:
     return "\n".join(lines)
 
 
+_CAT_COLORS = {
+    "MARKET": "#2563eb",
+    "REGULATORY": "#dc2626",
+    "RETAIL": "#059669",
+    "BRAND": "#7c3aed",
+    "INGREDIENT": "#d97706",
+}
+
+
+def _render_premium_html(digest: dict) -> str:
+    """Render the editorial 'NewsPulse Weekly Beauty Intel Digest' as print-ready HTML."""
+    week = digest.get("week", "")
+    today = date.today().strftime("%B %d, %Y")
+    summary = digest.get("executive_summary", "")
+
+    takeaways_html = ""
+    colors = ["#d63384", "#2563eb", "#7c3aed", "#059669"]
+    bgs = ["#fdf2f8", "#eff6ff", "#faf5ff", "#ecfdf5"]
+    for i, t in enumerate((digest.get("key_takeaways") or [])[:4]):
+        c, bg = colors[i % 4], bgs[i % 4]
+        takeaways_html += (
+            f"<div style='background:{bg};border-radius:10px;padding:20px 24px;"
+            f"margin-bottom:12px'>"
+            f"<div style='font-family:Georgia,serif;font-size:24px;font-weight:700;"
+            f"color:{c};margin-bottom:8px'>{i+1:02d}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#334155'>{t}</div></div>"
+        )
+
+    articles_html = ""
+    for cat, items in (digest.get("categories") or {}).items():
+        cat_color = _CAT_COLORS.get(cat, "#64748b")
+        articles_html += (
+            f"<div style='display:flex;align-items:center;gap:10px;margin:32px 0 16px'>"
+            f"<span style='background:{cat_color};color:#fff;padding:3px 10px;"
+            f"border-radius:5px;font-size:11px;font-weight:700;letter-spacing:.5px'>"
+            f"{cat}</span>"
+            f"<div style='flex:1;height:1px;background:#e2e8f0'></div></div>"
+        )
+        for a in items:
+            img_url = a.get("image_url") or ""
+            img_html = ""
+            if img_url and img_url.startswith(("https://", "http://")):
+                img_html = (
+                    f"<img src='{img_url}' style='width:100%;height:180px;"
+                    f"object-fit:cover;display:block' alt=''>"
+                )
+            impact = a.get("impact", "HIGH")
+            impact_bg = "#dc2626" if impact == "HIGH" else "#f59e0b"
+            prods_html = ""
+            for p in (a.get("products") or [])[:2]:
+                p_url = p.get("image_url") or ""
+                p_img = ""
+                if p_url and p_url.startswith(("https://", "http://")):
+                    p_img = (
+                        f"<img src='{p_url}' style='width:28px;height:28px;"
+                        f"border-radius:4px;object-fit:cover' alt=''>"
+                    )
+                brand = p.get("brand_name") or ""
+                brand_html = (
+                    f"<div style='font-size:10px;color:#94a3b8'>{brand}</div>"
+                    if brand else ""
+                )
+                prods_html += (
+                    f"<div style='display:inline-flex;align-items:center;gap:6px;"
+                    f"background:#f8fafc;padding:4px 8px;border-radius:6px;"
+                    f"border:1px solid #e2e8f0;margin-right:8px;margin-bottom:8px'>"
+                    f"{p_img}<div style='line-height:1.2'>"
+                    f"<div style='font-size:11px;font-weight:500;color:#334155'>"
+                    f"{p['name']}</div>{brand_html}</div></div>"
+                )
+            if prods_html:
+                prods_html = f"<div style='margin-bottom:12px'>{prods_html}</div>"
+            market = a.get("market", "")
+            market_bg = _CAT_COLORS.get(cat, "#eff6ff")
+            articles_html += (
+                f"<div style='background:#fff;border-radius:10px;border:1px solid #e2e8f0;"
+                f"overflow:hidden;border-left:3px solid {cat_color};margin-bottom:14px'>"
+                f"{img_html}"
+                f"<div style='padding:16px 20px 20px'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:flex-start;"
+                f"gap:10px;margin-bottom:10px'>"
+                f"<div style='font-size:15px;font-weight:600;line-height:1.4;color:#0f172a;"
+                f"flex:1'>{a['headline']}</div>"
+                f"<span style='flex-shrink:0;background:{impact_bg};color:#fff;padding:2px 7px;"
+                f"border-radius:4px;font-size:10px;font-weight:700'>{impact}</span></div>"
+                f"<div style='font-size:13px;line-height:1.55;color:#64748b;margin-bottom:12px'>"
+                f"{a.get('why_it_matters', '')}</div>"
+                f"{prods_html}"
+                f"<span style='display:inline-block;background:#eff6ff;color:{cat_color};"
+                f"padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500'>"
+                f"{market}</span>"
+                f"</div></div>"
+            )
+
+    trends_html = ""
+    trend_icons = ["&#10024;", "&#129302;", "&#127793;", "&#128138;"]
+    for i, t in enumerate(digest.get("emerging_trends") or []):
+        icon = trend_icons[i % 4]
+        trends_html += (
+            f"<div style='background:rgba(255,255,255,0.05);border:1px solid "
+            f"rgba(255,255,255,0.08);border-radius:8px;padding:16px;margin-bottom:12px'>"
+            f"<div style='font-size:13px;font-weight:600;color:#e2e8f0;margin-bottom:6px'>"
+            f"{icon} {t}</div></div>"
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>NewsPulse Weekly Beauty Intel Digest - {week}</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;500;600;700&display=swap');
+body {{ margin:0; font-family:'Inter',system-ui,sans-serif; color:#1e293b; }}
+@page {{ size: A4; margin: 0; }}
+</style></head><body>
+
+<div style="width:100%;background:#f8fafc">
+  <!-- HERO -->
+  <div style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 60%,#2d2240 100%);
+    padding:48px 40px 44px">
+    <div style="max-width:600px;margin:0 auto">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:24px">
+        <div style="width:32px;height:32px;border-radius:6px;background:#d63384;
+          text-align:center;line-height:32px;color:#fff;font-size:16px">&#9670;</div>
+        <span style="font-weight:700;font-size:15px;color:#fff;letter-spacing:.8px">
+          NEWSPULSE</span>
+      </div>
+      <div style="font-family:'DM Serif Display',Georgia,serif;font-size:44px;
+        font-weight:400;color:#fff;line-height:1.1;margin-bottom:20px">
+        Weekly Beauty<br>Intelligence Digest</div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span style="background:rgba(214,51,132,0.15);color:#f9a8d4;padding:5px 12px;
+          border-radius:16px;font-size:12px;font-weight:500">{week}</span>
+        <span style="color:#64748b;font-size:12px">{today}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXECUTIVE SUMMARY -->
+  <div style="max-width:600px;margin:0 auto;padding:40px 40px 32px">
+    <div style="border-left:3px solid #d63384;padding-left:10px;font-size:11px;
+      font-weight:700;text-transform:uppercase;letter-spacing:1.8px;color:#94a3b8;
+      margin-bottom:16px">Executive Summary</div>
+    <div style="font-family:'DM Serif Display',Georgia,serif;font-size:18px;line-height:1.7;
+      color:#334155;font-style:italic">{summary}</div>
+  </div>
+
+  <!-- KEY TAKEAWAYS -->
+  <div style="max-width:600px;margin:0 auto;padding:0 40px 32px">
+    <div style="border-left:3px solid #d63384;padding-left:10px;font-size:11px;
+      font-weight:700;text-transform:uppercase;letter-spacing:1.8px;color:#94a3b8;
+      margin-bottom:20px">Key Takeaways</div>
+    {takeaways_html}
+  </div>
+
+  <!-- ARTICLES -->
+  <div style="max-width:600px;margin:0 auto;padding:0 40px 20px">
+    <div style="border-left:3px solid #d63384;padding-left:10px;font-size:11px;
+      font-weight:700;text-transform:uppercase;letter-spacing:1.8px;color:#94a3b8;
+      margin-bottom:8px">This Week's Intelligence</div>
+    {articles_html}
+  </div>
+
+  <!-- EMERGING TRENDS -->
+  <div style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 60%,#2d2240 100%);
+    padding:40px;margin-top:8px">
+    <div style="max-width:600px;margin:0 auto">
+      <div style="border-left:3px solid #d63384;padding-left:10px;font-size:11px;
+        font-weight:700;text-transform:uppercase;letter-spacing:1.8px;color:#94a3b8;
+        margin-bottom:20px">Emerging Trends</div>
+      {trends_html}
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div style="padding:28px 40px;border-top:1px solid #e2e8f0;background:#fff">
+    <div style="max-width:600px;margin:0 auto;display:flex;justify-content:space-between;
+      align-items:center;flex-wrap:wrap;gap:12px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="width:22px;height:22px;border-radius:5px;background:#d63384;
+          text-align:center;line-height:22px;color:#fff;font-size:12px">&#9670;</div>
+        <span style="font-weight:700;font-size:13px;color:#334155">NewsPulse</span>
+        <span style="color:#cbd5e1;font-size:13px">by AsiaCosmePulse</span>
+      </div>
+      <div style="font-size:12px;color:#94a3b8">
+        AI-curated beauty industry intelligence</div>
+    </div>
+  </div>
+</div>
+</body></html>"""
+
+
+def _generate_pdf(html: str) -> bytes:
+    """Render HTML to PDF using Playwright (Chromium)."""
+    from playwright.sync_api import sync_playwright
+
+    with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+        f.write(html.encode())
+        html_path = f.name
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(f"file://{html_path}", wait_until="networkidle")
+        pdf_bytes = page.pdf(
+            format="A4",
+            print_background=True,
+            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
+        )
+        browser.close()
+
+    return pdf_bytes
+
+
 def generate_digest() -> dict:
     start = time.time()
     results: dict = {}
@@ -196,7 +409,7 @@ def generate_digest() -> dict:
     week = _week_label()
     print(f"[digest] Generating weekly digest for {week}", flush=True)
 
-    print("[digest] Step 1/3: Fetching top articles...", flush=True)
+    print("[digest] Step 1/4: Fetching top articles...", flush=True)
     try:
         engine = create_engine(settings.publish_database_url, pool_pre_ping=True)
         articles = _fetch_top_articles(engine)
@@ -221,7 +434,7 @@ def generate_digest() -> dict:
         results["skipped"] = "no articles"
         return results
 
-    print("[digest] Step 2/3: Generating report via Mistral...", flush=True)
+    print("[digest] Step 2/4: Generating report via Mistral...", flush=True)
     try:
         user_prompt = (
             f"Week: {week}\n\n"
@@ -250,7 +463,7 @@ def generate_digest() -> dict:
         results["generation_error"] = str(e)
         return results
 
-    print("[digest] Step 3/3: Saving to storage...", flush=True)
+    print("[digest] Step 3/4: Saving JSON + HTML to storage...", flush=True)
     try:
         storage = get_storage()
         json_key = f"digests/{week}_weekly-digest.json"
@@ -263,6 +476,20 @@ def generate_digest() -> dict:
     except Exception as e:
         print(f"[digest] ERROR: Storage save failed: {e}", flush=True)
         results["storage_error"] = str(e)
+
+    print("[digest] Step 4/4: Generating premium PDF...", flush=True)
+    try:
+        premium_html = _render_premium_html(digest)
+        pdf_bytes = _generate_pdf(premium_html)
+        today_str = date.today().isoformat()
+        pdf_key = f"digests/NewsPulse_Weekly_Digest_{week}_{today_str}.pdf"
+        storage.put(pdf_key, pdf_bytes)
+        results["pdf_key"] = pdf_key
+        results["pdf_size_kb"] = round(len(pdf_bytes) / 1024, 1)
+        print(f"[digest] PDF saved: {pdf_key} ({results['pdf_size_kb']} KB)", flush=True)
+    except Exception as e:
+        print(f"[digest] ERROR: PDF generation failed: {e}", flush=True)
+        results["pdf_error"] = str(e)
 
     elapsed = round(time.time() - start, 1)
     results["elapsed_seconds"] = elapsed

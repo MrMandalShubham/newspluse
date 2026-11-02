@@ -28,6 +28,9 @@ jobs:
       - name: Install dependencies
         run: pip install -e .
 
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
       - name: Generate weekly digest
         env:
           PUBLISH_DATABASE_URL: ${{ secrets.PUBLISH_DATABASE_URL }}
