@@ -233,7 +233,7 @@ def _render_premium_html(digest: dict) -> str:
             img_html = ""
             if img_url and img_url.startswith(("https://", "http://")):
                 img_html = (
-                    f"<img src='{img_url}' style='width:100%;height:180px;"
+                    f"<img src='{img_url}' style='width:100%;max-height:140px;"
                     f"object-fit:cover;display:block' alt=''>"
                 )
             impact = a.get("impact", "HIGH")
@@ -244,7 +244,7 @@ def _render_premium_html(digest: dict) -> str:
                 p_img = ""
                 if p_url and p_url.startswith(("https://", "http://")):
                     p_img = (
-                        f"<img src='{p_url}' style='width:28px;height:28px;"
+                        f"<img src='{p_url}' style='width:24px;height:24px;"
                         f"border-radius:4px;object-fit:cover' alt=''>"
                     )
                 brand = p.get("brand_name") or ""
@@ -381,7 +381,9 @@ body {{ margin:0; font-family:'Inter',system-ui,sans-serif; color:#1e293b; }}
 
 
 def _generate_pdf(html: str) -> bytes:
-    """Render HTML to PDF using Playwright (Chromium)."""
+    """Render HTML to PDF using Playwright (Chromium), with image compression."""
+    import os
+
     from playwright.sync_api import sync_playwright
 
     with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
@@ -390,15 +392,40 @@ def _generate_pdf(html: str) -> bytes:
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
+        page = browser.new_page(viewport={"width": 680, "height": 960})
         page.goto(f"file://{html_path}", wait_until="networkidle")
+        # Downscale all images to max 400px wide JPEG-quality via canvas
+        page.evaluate("""() => {
+            const imgs = document.querySelectorAll('img');
+            const promises = Array.from(imgs).map(img => new Promise(resolve => {
+                if (!img.complete) { img.onload = () => resolve(img); img.onerror = resolve; }
+                else resolve(img);
+            }));
+            return Promise.all(promises).then(loaded => {
+                loaded.forEach(img => {
+                    if (!(img instanceof HTMLImageElement) || !img.naturalWidth) return;
+                    const maxW = 400;
+                    const scale = Math.min(1, maxW / img.naturalWidth);
+                    const w = Math.round(img.naturalWidth * scale);
+                    const h = Math.round(img.naturalHeight * scale);
+                    const c = document.createElement('canvas');
+                    c.width = w; c.height = h;
+                    const ctx = c.getContext('2d');
+                    ctx.drawImage(img, 0, 0, w, h);
+                    try { img.src = c.toDataURL('image/jpeg', 0.6); } catch(e) {}
+                });
+            });
+        }""")
+        page.wait_for_timeout(500)
         pdf_bytes = page.pdf(
             format="A4",
             print_background=True,
             margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
+            scale=0.95,
         )
         browser.close()
 
+    os.unlink(html_path)
     return pdf_bytes
 
 
