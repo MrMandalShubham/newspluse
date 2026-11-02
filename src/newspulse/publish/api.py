@@ -656,14 +656,22 @@ def list_markets(
     return [MarketOut(code=r.code, name=r.name, article_count=r.cnt) for r in rows]
 
 
+class DigestProductOut(BaseModel):
+    name: str
+    brand_name: str | None = None
+    image_url: str | None = None
+
+
 class DigestArticleOut(BaseModel):
     headline: str
     summary: str | None = None
     category: str | None = None
     market: str | None = None
     url: str
+    image_url: str | None = None
     importance_score: int | None = None
     published_at: datetime | None = None
+    products: list[DigestProductOut] = []
 
 
 class DigestOut(BaseModel):
@@ -676,8 +684,9 @@ def weekly_digest(
     session: Session = Depends(get_platform_session),
 ) -> DigestOut:
     rows = session.execute(text(
-        "SELECT a.headline, a.summary, a.category, a.url, "
-        "a.importance_score, a.published_at, m.name AS market_name "
+        "SELECT a.id, a.headline, a.summary, a.category, a.url, "
+        "a.image_url, a.importance_score, a.published_at, "
+        "m.name AS market_name "
         "FROM news_pulse_articles a "
         "JOIN markets m ON a.market_id = m.id "
         "WHERE a.published_at >= now() - interval '7 days' "
@@ -686,6 +695,30 @@ def weekly_digest(
         "a.published_at DESC NULLS LAST "
         "LIMIT 7"
     )).fetchall()
+    aids = [r.id for r in rows]
+    products_map: dict = {}
+    if aids:
+        for p in session.execute(text(
+            "SELECT article_id, name, brand_name, primary_image_url FROM ("
+            "  SELECT nap.article_id, p.name, b.name AS brand_name, "
+            "    p.primary_image_url, "
+            "    row_number() OVER (PARTITION BY nap.article_id ORDER BY "
+            "      coalesce(p.data_quality_score,0) DESC, "
+            "      p.is_best DESC NULLS LAST) AS rn "
+            "  FROM news_article_products nap "
+            "  JOIN products_master p ON p.id = nap.product_id "
+            "    AND p.data_source IS DISTINCT FROM 'newspulse' "
+            "  LEFT JOIN brands b ON b.id = p.brand_id "
+            "  WHERE nap.article_id = ANY(:aids)"
+            ") t WHERE rn <= 2"
+        ), {"aids": aids}).fetchall():
+            products_map.setdefault(p.article_id, []).append(
+                DigestProductOut(
+                    name=p.name,
+                    brand_name=p.brand_name,
+                    image_url=p.primary_image_url,
+                )
+            )
     return DigestOut(
         week_of=date.today().isoformat(),
         articles=[
@@ -695,8 +728,10 @@ def weekly_digest(
                 category=r.category,
                 market=r.market_name,
                 url=r.url,
+                image_url=r.image_url,
                 importance_score=r.importance_score,
                 published_at=r.published_at,
+                products=products_map.get(r.id, []),
             )
             for r in rows
         ],

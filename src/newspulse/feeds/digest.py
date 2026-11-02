@@ -64,9 +64,9 @@ def _week_label() -> str:
 def _fetch_top_articles(engine, limit: int = 20) -> list[dict]:
     with engine.connect() as conn:
         rows = conn.execute(text(
-            "SELECT a.headline, a.summary, a.category, a.sentiment, "
+            "SELECT a.id, a.headline, a.summary, a.category, a.sentiment, "
             "a.importance_score, a.published_at, a.url, a.event_types, "
-            "m.name AS market "
+            "a.image_url, m.name AS market "
             "FROM news_pulse_articles a "
             "JOIN markets m ON a.market_id = m.id "
             "WHERE a.published_at >= now() - interval '7 days' "
@@ -77,6 +77,7 @@ def _fetch_top_articles(engine, limit: int = 20) -> list[dict]:
         ), {"lim": limit}).fetchall()
     return [
         {
+            "id": r.id,
             "headline": r.headline,
             "summary": r.summary,
             "category": r.category,
@@ -85,10 +86,40 @@ def _fetch_top_articles(engine, limit: int = 20) -> list[dict]:
             "published_at": r.published_at.isoformat() if r.published_at else None,
             "url": r.url,
             "event_types": r.event_types,
+            "image_url": r.image_url,
             "market": r.market,
         }
         for r in rows
     ]
+
+
+def _fetch_related_products(engine, article_ids: list) -> dict:
+    """Return {article_id: [{name, brand_name, image_url}]} — max 2 per article."""
+    if not article_ids:
+        return {}
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT article_id, name, brand_name, primary_image_url FROM ("
+            "  SELECT nap.article_id, p.name, b.name AS brand_name, "
+            "    p.primary_image_url, "
+            "    row_number() OVER (PARTITION BY nap.article_id ORDER BY "
+            "      coalesce(p.data_quality_score,0) DESC, "
+            "      p.is_best DESC NULLS LAST) AS rn "
+            "  FROM news_article_products nap "
+            "  JOIN products_master p ON p.id = nap.product_id "
+            "    AND p.data_source IS DISTINCT FROM 'newspulse' "
+            "  LEFT JOIN brands b ON b.id = p.brand_id "
+            "  WHERE nap.article_id = ANY(:aids)"
+            ") t WHERE rn <= 2"
+        ), {"aids": article_ids}).fetchall()
+    result: dict = {}
+    for r in rows:
+        result.setdefault(r.article_id, []).append({
+            "name": r.name,
+            "brand_name": r.brand_name,
+            "image_url": r.primary_image_url,
+        })
+    return result
 
 
 def _render_html(digest: dict) -> str:
@@ -104,6 +135,13 @@ def _render_html(digest: dict) -> str:
         ".meta{color:#666;font-size:.85em;margin-top:.5em}"
         ".tag{display:inline-block;background:#d63384;color:#fff;padding:2px 8px;"
         "border-radius:4px;font-size:.75em;margin-right:.5em}"
+        ".article-img{width:100%;max-height:200px;object-fit:cover;border-radius:6px;"
+        "margin-bottom:.8em}"
+        ".products{display:flex;gap:.8em;margin-top:.8em;flex-wrap:wrap}"
+        ".product{display:flex;align-items:center;gap:.5em;background:#fff;"
+        "padding:6px 10px;border-radius:6px;border:1px solid #e8e8e8;font-size:.8em}"
+        ".product img{width:40px;height:40px;object-fit:cover;border-radius:4px}"
+        ".product-info{line-height:1.3}.product-brand{color:#888;font-size:.85em}"
         "ol,ul{padding-left:1.5em}</style></head><body>",
         f"<h1>Weekly Beauty Intel Digest</h1><p><em>{week}</em></p>",
         f"<h2>Executive Summary</h2><p>{digest.get('executive_summary', '')}</p>",
@@ -116,9 +154,29 @@ def _render_html(digest: dict) -> str:
     for cat, articles in (digest.get("categories") or {}).items():
         lines.append(f"<h2><span class='tag'>{cat}</span></h2>")
         for a in articles:
+            img_url = a.get("image_url") or ""
+            img_tag = ""
+            if img_url and img_url.startswith(("https://", "http://")):
+                img_tag = f"<img class='article-img' src='{img_url}' loading='lazy' alt=''>"
+            prod_html = ""
+            for p in (a.get("products") or [])[:2]:
+                p_img = ""
+                p_url = p.get("image_url") or ""
+                if p_url and p_url.startswith(("https://", "http://")):
+                    p_img = f"<img src='{p_url}' loading='lazy' alt=''>"
+                brand = p.get("brand_name") or ""
+                brand_span = f"<div class='product-brand'>{brand}</div>" if brand else ""
+                prod_html += (
+                    f"<div class='product'>{p_img}"
+                    f"<div class='product-info'><div>{p['name']}</div>{brand_span}</div>"
+                    f"</div>"
+                )
+            if prod_html:
+                prod_html = f"<div class='products'>{prod_html}</div>"
             lines.append(
-                f"<div class='card'><strong>{a['headline']}</strong>"
+                f"<div class='card'>{img_tag}<strong>{a['headline']}</strong>"
                 f"<p>{a.get('why_it_matters', '')}</p>"
+                f"{prod_html}"
                 f"<p class='meta'>{a.get('market', '')} &middot; "
                 f"Impact: {a.get('impact', '')}</p></div>"
             )
@@ -134,6 +192,7 @@ def _render_html(digest: dict) -> str:
 def generate_digest() -> dict:
     start = time.time()
     results: dict = {}
+    headline_extras: dict = {}
     week = _week_label()
     print(f"[digest] Generating weekly digest for {week}", flush=True)
 
@@ -141,7 +200,15 @@ def generate_digest() -> dict:
     try:
         engine = create_engine(settings.publish_database_url, pool_pre_ping=True)
         articles = _fetch_top_articles(engine)
+        article_ids = [a["id"] for a in articles]
+        products_map = _fetch_related_products(engine, article_ids)
         engine.dispose()
+        for a in articles:
+            headline_extras[a["headline"]] = {
+                "image_url": a.get("image_url"),
+                "url": a.get("url"),
+                "products": products_map.get(a["id"], []),
+            }
         results["articles_fetched"] = len(articles)
         print(f"[digest] Found {len(articles)} articles", flush=True)
     except Exception as e:
@@ -169,6 +236,13 @@ def generate_digest() -> dict:
         client.close()
         digest = json.loads(content)
         digest["week"] = week
+        for cat_items in (digest.get("categories") or {}).values():
+            for item in cat_items:
+                extras = headline_extras.get(item.get("headline"), {})
+                if extras:
+                    item.setdefault("image_url", extras.get("image_url"))
+                    item.setdefault("url", extras.get("url"))
+                    item.setdefault("products", extras.get("products", []))
         results["usage"] = usage
         print(f"[digest] Report generated (tokens: {usage})", flush=True)
     except Exception as e:
