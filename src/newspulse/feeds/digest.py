@@ -70,7 +70,7 @@ def _fetch_top_articles(engine, limit: int = 20) -> list[dict]:
             "FROM news_pulse_articles a "
             "JOIN markets m ON a.market_id = m.id "
             "WHERE a.published_at >= now() - interval '7 days' "
-            "AND coalesce(a.importance_score, 0) > 3 "
+            "AND coalesce(a.importance_score, 0) >= 3 "
             "ORDER BY a.importance_score DESC NULLS LAST, "
             "a.published_at DESC NULLS LAST "
             "LIMIT :lim"
