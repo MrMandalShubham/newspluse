@@ -86,6 +86,8 @@ Returns all articles. Supports filtering and pagination.
 | `event_type` | string | — | Filter by event type (Partnership, Launch, Expansion, etc.) |
 | `story` | string | — | Filter by story_id (group of related articles) |
 | `q` | string | — | Search in headline and summary |
+| `since` | string | — | ISO date inclusive lower bound (e.g. `2026-10-01`) |
+| `until` | string | — | ISO date exclusive upper bound (e.g. `2026-11-01`) |
 | `sort` | string | `recent` | Sort order: `recent`, `importance`, `velocity` |
 | `page` | int | 1 | Page number (only used with page_size) |
 | `page_size` | int | all | Results per page; omit to get all articles |
@@ -165,6 +167,12 @@ GET /api/news-pulse/articles?fields=lite
 
 # Lite + paginated (recommended for dashboard list views)
 GET /api/news-pulse/articles?fields=lite&page_size=50
+
+# Date range — all October 2026 articles
+GET /api/news-pulse/articles?since=2026-10-01&until=2026-11-01
+
+# Last 7 days in Japan
+GET /api/news-pulse/articles?market=JP&since=2026-10-27
 ```
 
 ### GET /api/news-pulse/articles/{slug}
@@ -263,16 +271,17 @@ Returns per-brand aggregates with 7-day velocity trends. Use this for brand over
     "article_count": 239,
     "velocity_7d": 15,
     "velocity_prior_7d": 12,
-    "top_market": "KR"
-  },
-  {
-    "id": "uuid",
-    "name": "SHISEIDO",
-    "slug": "shiseido-e264c6",
-    "article_count": 163,
-    "velocity_7d": 29,
-    "velocity_prior_7d": 19,
-    "top_market": "JP"
+    "sentiment_pct": 72,
+    "top_market": "KR",
+    "recent": [
+      {
+        "slug": "medicube-collagen-launch-abc123",
+        "headline": "Medicube launches collagen booster line",
+        "published_at": "2026-10-30T08:00:00Z",
+        "market_code": "KR",
+        "image_url": "https://example.com/img.jpg"
+      }
+    ]
   }
 ]
 ```
@@ -280,7 +289,9 @@ Returns per-brand aggregates with 7-day velocity trends. Use this for brand over
 **Fields:**
 - `velocity_7d` — articles in the last 7 days
 - `velocity_prior_7d` — articles in the 7 days before that (use for trend arrows: up/down)
+- `sentiment_pct` — 0-100, percentage of articles with positive sentiment (null if no sentiment data)
 - `top_market` — market code where this brand appears most
+- `recent` — 3 most recent articles per brand (slug, headline, published_at, market_code, image_url)
 
 **Examples:**
 
@@ -648,10 +659,10 @@ Write endpoints (leads, webhooks) are not cached.
 
 1. **Use `?fields=lite` for article list views** — skips nested entities (brands/products/companies/ingredients), cuts response from ~46MB to ~5MB. Load full detail via `/articles/{slug}` on click.
 2. **Use `/stats` for dashboard widgets** — total counts, monthly history chart, market coverage chart, signal breakdown. One API call gives everything.
-3. **Use `/brand-coverage` for brand rankings** — pre-computed aggregates with 7-day velocity trends. Don't compute these client-side from all articles.
+3. **Use `/brand-coverage` for brand rankings** — pre-computed aggregates with 7-day velocity trends, sentiment percentage, and 3 most recent headlines per brand. Don't compute these client-side from all articles.
 4. **Use `/markets` for market filter dropdowns** — dynamically populated, sorted by article count.
 5. **Use `/brands?min_articles=5` for brand filters** — avoids loading 5000+ brands, shows only relevant ones.
-6. **No pagination limit on `/articles`** — omit `page_size` to get all articles. Use `page_size` + `page` if you want pagination.
+6. **No pagination limit on `/articles`** — omit `page_size` to get all articles. Use `page_size` + `page` if you want pagination. Use `since`/`until` for date-range filtering.
 7. **Lead creation auto-syncs to Klaviyo** — no frontend Klaviyo SDK needed.
 8. **`story_id` groups related articles** — use this to show "X sources covering this story".
 9. **All IDs are UUIDs** except lead IDs (integers) and story_ids (strings like "story-12345").
