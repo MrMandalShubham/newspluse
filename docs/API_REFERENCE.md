@@ -6,7 +6,7 @@
 
 **Swagger Docs:** `https://lionfish-app-ldci4.ondigitalocean.app/docs`
 
-**Status:** All endpoints tested and working as of 2026-10-28.
+**Status:** All endpoints tested and working as of 2026-11-03.
 
 ---
 
@@ -89,6 +89,7 @@ Returns all articles. Supports filtering and pagination.
 | `sort` | string | `recent` | Sort order: `recent`, `importance`, `velocity` |
 | `page` | int | 1 | Page number (only used with page_size) |
 | `page_size` | int | all | Results per page; omit to get all articles |
+| `fields` | string | — | `lite` to omit nested entities (brands/products/companies/ingredients) for faster response |
 
 **Response:**
 
@@ -158,6 +159,12 @@ GET /api/news-pulse/articles?sort=importance
 
 # Combined filters
 GET /api/news-pulse/articles?market=JP&signal=emerging-topic&sort=importance&page_size=20
+
+# Lite mode — fast list without nested entities (~46MB → ~5MB)
+GET /api/news-pulse/articles?fields=lite
+
+# Lite + paginated (recommended for dashboard list views)
+GET /api/news-pulse/articles?fields=lite&page_size=50
 ```
 
 ### GET /api/news-pulse/articles/{slug}
@@ -227,6 +234,65 @@ Returns all markets with article counts, sorted by most articles.
   { "code": "TH", "name": "Thailand", "article_count": 159 },
   { "code": "GB", "name": "United Kingdom", "article_count": 158 }
 ]
+```
+
+---
+
+## Brand Coverage
+
+### GET /api/news-pulse/brand-coverage
+
+Returns per-brand aggregates with 7-day velocity trends. Use this for brand overview/ranking views instead of computing client-side from all articles.
+
+**Query Parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `market` | string | — | Filter by market code |
+| `min_articles` | int | 3 | Minimum article count to include |
+| `limit` | int | 50 | Max brands to return (max 500) |
+
+**Response:**
+
+```json
+[
+  {
+    "id": "uuid",
+    "name": "medicube",
+    "slug": "medicube-b7a39e",
+    "article_count": 239,
+    "velocity_7d": 15,
+    "velocity_prior_7d": 12,
+    "top_market": "KR"
+  },
+  {
+    "id": "uuid",
+    "name": "SHISEIDO",
+    "slug": "shiseido-e264c6",
+    "article_count": 163,
+    "velocity_7d": 29,
+    "velocity_prior_7d": 19,
+    "top_market": "JP"
+  }
+]
+```
+
+**Fields:**
+- `velocity_7d` — articles in the last 7 days
+- `velocity_prior_7d` — articles in the 7 days before that (use for trend arrows: up/down)
+- `top_market` — market code where this brand appears most
+
+**Examples:**
+
+```
+# Top 50 brands overall
+GET /api/news-pulse/brand-coverage
+
+# Top brands in Japan
+GET /api/news-pulse/brand-coverage?market=JP
+
+# Top 100 brands with 5+ articles
+GET /api/news-pulse/brand-coverage?min_articles=5&limit=100
 ```
 
 ---
@@ -562,13 +628,31 @@ Allowed methods: `GET`, `POST`, `PATCH`, `OPTIONS`
 
 ---
 
+## Caching
+
+All read endpoints (articles, stats, brands, markets, stories, topics, brand-coverage) return:
+
+```
+Cache-Control: public, max-age=60, s-maxage=300, stale-while-revalidate=86400
+```
+
+- Browser caches for 60 seconds
+- CDN/proxy caches for 5 minutes
+- Stale content served while revalidating for up to 24 hours
+
+Write endpoints (leads, webhooks) are not cached.
+
+---
+
 ## Notes for Frontend Developer
 
-1. **No pagination limit on `/articles`** — omit `page_size` to get all articles in one call. Use `page_size` + `page` if you want pagination.
+1. **Use `?fields=lite` for article list views** — skips nested entities (brands/products/companies/ingredients), cuts response from ~46MB to ~5MB. Load full detail via `/articles/{slug}` on click.
 2. **Use `/stats` for dashboard widgets** — total counts, monthly history chart, market coverage chart, signal breakdown. One API call gives everything.
-3. **Use `/markets` for market filter dropdowns** — dynamically populated, sorted by article count.
-4. **Use `/brands?min_articles=5` for brand filters** — avoids loading 5000+ brands, shows only relevant ones.
-5. **Lead creation auto-syncs to Klaviyo** — no frontend Klaviyo SDK needed.
-6. **`story_id` groups related articles** — use this to show "X sources covering this story".
-7. **All IDs are UUIDs** except lead IDs (integers) and story_ids (strings like "story-12345").
-8. **Need a new endpoint?** — request it and we'll build it. Possible additions: `/articles/trending`, `/brands/{slug}`, `/search`, weekly digest endpoint, etc.
+3. **Use `/brand-coverage` for brand rankings** — pre-computed aggregates with 7-day velocity trends. Don't compute these client-side from all articles.
+4. **Use `/markets` for market filter dropdowns** — dynamically populated, sorted by article count.
+5. **Use `/brands?min_articles=5` for brand filters** — avoids loading 5000+ brands, shows only relevant ones.
+6. **No pagination limit on `/articles`** — omit `page_size` to get all articles. Use `page_size` + `page` if you want pagination.
+7. **Lead creation auto-syncs to Klaviyo** — no frontend Klaviyo SDK needed.
+8. **`story_id` groups related articles** — use this to show "X sources covering this story".
+9. **All IDs are UUIDs** except lead IDs (integers) and story_ids (strings like "story-12345").
+10. **Need a new endpoint?** — request it and we'll build it.
