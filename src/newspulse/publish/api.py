@@ -458,7 +458,7 @@ def list_articles(
     sort: str = Query("recent", description="Sort: recent, importance, velocity"),
     page: int = Query(1, ge=1),
     page_size: int | None = Query(None, ge=1, description="Results per page; omit for all"),
-    fields: str | None = Query(None, description="'lite' to omit nested entities for faster response"),
+    fields: str | None = Query(None, description="'lite' omits nested entities"),
     session: Session = Depends(get_platform_session),
 ) -> ArticleListOut:
     where_clauses = []
