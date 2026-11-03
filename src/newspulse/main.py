@@ -33,6 +33,14 @@ app.add_middleware(
 )
 
 
+_CACHEABLE_PREFIXES = (
+    "/api/news-pulse/articles", "/api/news-pulse/stats",
+    "/api/news-pulse/brands", "/api/news-pulse/markets",
+    "/api/news-pulse/stories", "/api/news-pulse/topics",
+    "/api/news-pulse/brand-coverage",
+)
+
+
 @app.middleware("http")
 async def security_headers(request: Request, call_next) -> Response:
     response = await call_next(request)
@@ -40,6 +48,10 @@ async def security_headers(request: Request, call_next) -> Response:
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.method == "GET" and request.url.path.startswith(_CACHEABLE_PREFIXES):
+        response.headers["Cache-Control"] = (
+            "public, max-age=60, s-maxage=300, stale-while-revalidate=86400"
+        )
     return response
 
 

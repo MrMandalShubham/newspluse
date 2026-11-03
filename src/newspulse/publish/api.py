@@ -458,6 +458,7 @@ def list_articles(
     sort: str = Query("recent", description="Sort: recent, importance, velocity"),
     page: int = Query(1, ge=1),
     page_size: int | None = Query(None, ge=1, description="Results per page; omit for all"),
+    fields: str | None = Query(None, description="'lite' to omit nested entities for faster response"),
     session: Session = Depends(get_platform_session),
 ) -> ArticleListOut:
     where_clauses = []
@@ -523,7 +524,28 @@ def list_articles(
             f"ORDER BY {order} LIMIT :lim OFFSET :off"
         ), {**params, "lim": page_size, "off": offset}).fetchall()
 
-    articles = _build_articles_batch(rows, session)
+    if fields == "lite":
+        articles = [
+            ArticleOut(
+                id=row.id, slug=row.slug,
+                story_id=getattr(row, "story_id", None),
+                headline=row.headline,
+                headline_original=getattr(row, "headline_original", None),
+                summary=row.summary,
+                language=getattr(row, "language", None),
+                source=row.source, source_tier=row.source_tier,
+                url=row.url, image_url=row.image_url,
+                market=row.market_name, market_code=row.market_code,
+                signal_tier=row.signal_tier,
+                topic_velocity=row.topic_velocity,
+                importance_score=row.importance_score,
+                event_types=row.event_types,
+                published_at=row.published_at,
+            )
+            for row in rows
+        ]
+    else:
+        articles = _build_articles_batch(rows, session)
     actual_page_size = page_size or total
 
     return ArticleListOut(articles=articles, total=total, page=page, page_size=actual_page_size)
@@ -654,6 +676,59 @@ def list_markets(
         "ORDER BY cnt DESC"
     )).fetchall()
     return [MarketOut(code=r.code, name=r.name, article_count=r.cnt) for r in rows]
+
+
+class BrandCoverageOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str | None
+    article_count: int
+    velocity_7d: int
+    velocity_prior_7d: int
+    top_market: str | None
+
+
+@router.get("/brand-coverage", response_model=list[BrandCoverageOut])
+def brand_coverage(
+    market: str | None = Query(None, description="Filter by market code"),
+    min_articles: int = Query(3, ge=1),
+    limit: int = Query(50, ge=1, le=500),
+    session: Session = Depends(get_platform_session),
+) -> list[BrandCoverageOut]:
+    market_filter = ""
+    params: dict = {"min_art": min_articles, "lim": limit}
+    if market:
+        market_filter = "JOIN markets m ON a.market_id = m.id AND m.code = :mkt "
+        params["mkt"] = market.upper()
+
+    rows = session.execute(text(f"""
+        SELECT b.id, b.name, b.slug,
+          count(*) AS article_count,
+          count(*) FILTER (WHERE a.published_at >= now() - interval '7 days') AS velocity_7d,
+          count(*) FILTER (WHERE a.published_at >= now() - interval '14 days'
+                           AND a.published_at < now() - interval '7 days') AS velocity_prior_7d,
+          (SELECT m2.code FROM news_pulse_articles a2
+           JOIN markets m2 ON a2.market_id = m2.id
+           JOIN news_article_brands ab2 ON ab2.article_id = a2.id
+           WHERE ab2.brand_id = b.id
+           GROUP BY m2.code ORDER BY count(*) DESC LIMIT 1) AS top_market
+        FROM brands b
+        JOIN news_article_brands ab ON ab.brand_id = b.id
+        JOIN news_pulse_articles a ON a.id = ab.article_id
+        {market_filter}
+        GROUP BY b.id, b.name, b.slug
+        HAVING count(*) >= :min_art
+        ORDER BY article_count DESC
+        LIMIT :lim
+    """), params).fetchall()
+
+    return [BrandCoverageOut(
+        id=r.id, name=r.name, slug=r.slug,
+        article_count=r.article_count,
+        velocity_7d=r.velocity_7d,
+        velocity_prior_7d=r.velocity_prior_7d,
+        top_market=r.top_market,
+    ) for r in rows]
 
 
 class DigestProductOut(BaseModel):
