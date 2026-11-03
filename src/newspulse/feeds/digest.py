@@ -489,9 +489,13 @@ def generate_digest() -> dict:
         today_str = date.today().isoformat()
         pdf_key = f"digests/NewsPulse_Weekly_Digest_{week}_{today_str}.pdf"
         storage.put(pdf_key, pdf_bytes)
+        pdf_url = storage.public_url(pdf_key)
         results["pdf_key"] = pdf_key
+        results["pdf_url"] = pdf_url
         results["pdf_size_kb"] = round(len(pdf_bytes) / 1024, 1)
         print(f"[digest] PDF saved: {pdf_key} ({results['pdf_size_kb']} KB)", flush=True)
+        if pdf_url:
+            print(f"[digest] PDF URL: {pdf_url}", flush=True)
     except Exception as e:
         print(f"[digest] ERROR: PDF generation failed: {e}", flush=True)
         results["pdf_error"] = str(e)
@@ -518,7 +522,7 @@ def generate_digest() -> dict:
                 "takeaway_2": takeaways[1] if len(takeaways) > 1 else "",
                 "takeaway_3": takeaways[2] if len(takeaways) > 2 else "",
                 "takeaway_4": takeaways[3] if len(takeaways) > 3 else "",
-                "digest_url": f"https://asiacosmepulse.com/digest/{week}",
+                "digest_url": results.get("pdf_url") or f"https://asiacosmepulse.com/digest/{week}",
             }
             for i, t in enumerate(trends[:4], 1):
                 if isinstance(t, str):

@@ -28,6 +28,10 @@ class Settings(BaseSettings):
 
     # --- Object storage: raw article text (local dev; DO Spaces in production) ---
     storage_dir: str = "./data/raw"
+    spaces_endpoint: str = ""
+    spaces_bucket: str = ""
+    spaces_key: str = ""
+    spaces_secret: str = ""
 
     # --- Collector politeness ---
     user_agent: str = "NewsPulseBot/0.1 (+https://www.asiacosmepulse.com)"

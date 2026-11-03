@@ -38,6 +38,10 @@ jobs:
           MISTRAL_MODEL: mistral-small-latest
           KLAVIYO_API_KEY: ${{ secrets.KLAVIYO_API_KEY }}
           KLAVIYO_LIST_ID: ${{ secrets.KLAVIYO_LIST_ID }}
+          SPACES_ENDPOINT: ${{ secrets.SPACES_ENDPOINT }}
+          SPACES_BUCKET: ${{ secrets.SPACES_BUCKET }}
+          SPACES_KEY: ${{ secrets.SPACES_KEY }}
+          SPACES_SECRET: ${{ secrets.SPACES_SECRET }}
           STORAGE_DIR: ./data/raw
           APP_ENV: production
         run: python -m newspulse.feeds.digest
