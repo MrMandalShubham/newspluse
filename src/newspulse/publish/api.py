@@ -455,6 +455,8 @@ def list_articles(
     event_type: str | None = Query(None, description="Filter by event type"),
     story: str | None = Query(None, description="Filter by story_id (group of related articles)"),
     q: str | None = Query(None, description="Search headline/summary"),
+    since: str | None = Query(None, description="ISO date inclusive lower bound"),
+    until: str | None = Query(None, description="ISO date exclusive upper bound"),
     sort: str = Query("recent", description="Sort: recent, importance, velocity"),
     page: int = Query(1, ge=1),
     page_size: int | None = Query(None, ge=1, description="Results per page; omit for all"),
@@ -495,6 +497,14 @@ def list_articles(
         where_clauses.append("(a.headline ILIKE :q OR a.summary ILIKE :q)")
         escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         params["q"] = f"%{escaped_q}%"
+
+    if since:
+        where_clauses.append("a.published_at >= :since")
+        params["since"] = since
+
+    if until:
+        where_clauses.append("a.published_at < :until")
+        params["until"] = until
 
     where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -678,6 +688,14 @@ def list_markets(
     return [MarketOut(code=r.code, name=r.name, article_count=r.cnt) for r in rows]
 
 
+class BrandRecentArticle(BaseModel):
+    slug: str | None
+    headline: str
+    published_at: datetime | None
+    market_code: str | None
+    image_url: str | None
+
+
 class BrandCoverageOut(BaseModel):
     id: uuid.UUID
     name: str
@@ -685,7 +703,9 @@ class BrandCoverageOut(BaseModel):
     article_count: int
     velocity_7d: int
     velocity_prior_7d: int
+    sentiment_pct: int | None
     top_market: str | None
+    recent: list[BrandRecentArticle] = []
 
 
 @router.get("/brand-coverage", response_model=list[BrandCoverageOut])
@@ -698,20 +718,37 @@ def brand_coverage(
     market_filter = ""
     params: dict = {"min_art": min_articles, "lim": limit}
     if market:
-        market_filter = "JOIN markets m ON a.market_id = m.id AND m.code = :mkt "
+        market_filter = (
+            "JOIN markets m ON a.market_id = m.id "
+            "AND m.code = :mkt "
+        )
         params["mkt"] = market.upper()
 
     rows = session.execute(text(f"""
         SELECT b.id, b.name, b.slug,
           count(*) AS article_count,
-          count(*) FILTER (WHERE a.published_at >= now() - interval '7 days') AS velocity_7d,
-          count(*) FILTER (WHERE a.published_at >= now() - interval '14 days'
-                           AND a.published_at < now() - interval '7 days') AS velocity_prior_7d,
+          count(*) FILTER (
+            WHERE a.published_at >= now() - interval '7 days'
+          ) AS velocity_7d,
+          count(*) FILTER (
+            WHERE a.published_at >= now() - interval '14 days'
+            AND a.published_at < now() - interval '7 days'
+          ) AS velocity_prior_7d,
+          CASE WHEN count(*) FILTER (
+            WHERE a.sentiment IS NOT NULL
+          ) > 0 THEN round(
+            100.0 * count(*) FILTER (
+              WHERE a.sentiment = 'positive'
+            ) / count(*) FILTER (
+              WHERE a.sentiment IS NOT NULL
+            )
+          )::int END AS sentiment_pct,
           (SELECT m2.code FROM news_pulse_articles a2
            JOIN markets m2 ON a2.market_id = m2.id
            JOIN news_article_brands ab2 ON ab2.article_id = a2.id
            WHERE ab2.brand_id = b.id
-           GROUP BY m2.code ORDER BY count(*) DESC LIMIT 1) AS top_market
+           GROUP BY m2.code ORDER BY count(*) DESC LIMIT 1
+          ) AS top_market
         FROM brands b
         JOIN news_article_brands ab ON ab.brand_id = b.id
         JOIN news_pulse_articles a ON a.id = ab.article_id
@@ -722,12 +759,42 @@ def brand_coverage(
         LIMIT :lim
     """), params).fetchall()
 
+    brand_ids = [r.id for r in rows]
+    recent_map: dict = {}
+    if brand_ids:
+        recent_rows = session.execute(text("""
+            SELECT * FROM (
+              SELECT ab.brand_id, a.slug, a.headline,
+                a.published_at, m.code AS market_code,
+                a.image_url,
+                row_number() OVER (
+                  PARTITION BY ab.brand_id
+                  ORDER BY a.published_at DESC NULLS LAST
+                ) AS rn
+              FROM news_article_brands ab
+              JOIN news_pulse_articles a ON a.id = ab.article_id
+              JOIN markets m ON a.market_id = m.id
+              WHERE ab.brand_id = ANY(:bids)
+            ) sub WHERE rn <= 3
+        """), {"bids": brand_ids}).fetchall()
+        for rr in recent_rows:
+            recent_map.setdefault(rr.brand_id, []).append(
+                BrandRecentArticle(
+                    slug=rr.slug, headline=rr.headline,
+                    published_at=rr.published_at,
+                    market_code=rr.market_code,
+                    image_url=rr.image_url,
+                )
+            )
+
     return [BrandCoverageOut(
         id=r.id, name=r.name, slug=r.slug,
         article_count=r.article_count,
         velocity_7d=r.velocity_7d,
         velocity_prior_7d=r.velocity_prior_7d,
+        sentiment_pct=r.sentiment_pct,
         top_market=r.top_market,
+        recent=recent_map.get(r.id, []),
     ) for r in rows]
 
 
