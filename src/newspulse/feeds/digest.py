@@ -414,7 +414,7 @@ def generate_digest() -> dict:
     week = _week_label()
     print(f"[digest] Generating weekly digest for {week}", flush=True)
 
-    print("[digest] Step 1/4: Fetching top articles...", flush=True)
+    print("[digest] Step 1/5: Fetching top articles...", flush=True)
     try:
         engine = create_engine(settings.publish_database_url, pool_pre_ping=True)
         articles = _fetch_top_articles(engine)
@@ -439,7 +439,7 @@ def generate_digest() -> dict:
         results["skipped"] = "no articles"
         return results
 
-    print("[digest] Step 2/4: Generating report via Mistral...", flush=True)
+    print("[digest] Step 2/5: Generating report via Mistral...", flush=True)
     try:
         user_prompt = (
             f"Week: {week}\n\n"
@@ -468,7 +468,7 @@ def generate_digest() -> dict:
         results["generation_error"] = str(e)
         return results
 
-    print("[digest] Step 3/4: Saving JSON + HTML to storage...", flush=True)
+    print("[digest] Step 3/5: Saving JSON + HTML to storage...", flush=True)
     try:
         storage = get_storage()
         json_key = f"digests/{week}_weekly-digest.json"
@@ -482,7 +482,7 @@ def generate_digest() -> dict:
         print(f"[digest] ERROR: Storage save failed: {e}", flush=True)
         results["storage_error"] = str(e)
 
-    print("[digest] Step 4/4: Generating premium PDF...", flush=True)
+    print("[digest] Step 4/5: Generating premium PDF...", flush=True)
     try:
         premium_html = _render_premium_html(digest, for_pdf=True)
         pdf_bytes = _generate_pdf(premium_html)
@@ -495,6 +495,51 @@ def generate_digest() -> dict:
     except Exception as e:
         print(f"[digest] ERROR: PDF generation failed: {e}", flush=True)
         results["pdf_error"] = str(e)
+
+    print("[digest] Step 5/5: Notifying Klaviyo subscribers...", flush=True)
+    try:
+        from newspulse.integrations.klaviyo import (
+            get_list_profile_ids_sync,
+            track_event_sync,
+        )
+
+        profile_ids = get_list_profile_ids_sync()
+        if not profile_ids:
+            print("[digest] No Klaviyo subscribers (or Klaviyo not configured)", flush=True)
+            results["klaviyo_sent"] = 0
+        else:
+            takeaways = digest.get("key_takeaways") or []
+            trends = digest.get("emerging_trends") or []
+            props = {
+                "week": week,
+                "article_count": str(results.get("articles_fetched", 0)),
+                "executive_summary": digest.get("executive_summary", ""),
+                "takeaway_1": takeaways[0] if len(takeaways) > 0 else "",
+                "takeaway_2": takeaways[1] if len(takeaways) > 1 else "",
+                "takeaway_3": takeaways[2] if len(takeaways) > 2 else "",
+                "takeaway_4": takeaways[3] if len(takeaways) > 3 else "",
+                "digest_url": f"https://asiacosmepulse.com/digest/{week}",
+            }
+            for i, t in enumerate(trends[:4], 1):
+                if isinstance(t, str):
+                    props[f"trend_{i}_title"] = t
+                    props[f"trend_{i}"] = t
+                elif isinstance(t, dict):
+                    props[f"trend_{i}_title"] = t.get("title", t.get("trend", ""))
+                    props[f"trend_{i}"] = t.get("description", t.get("detail", ""))
+
+            sent = 0
+            for pid in profile_ids:
+                if track_event_sync(pid, "Weekly Digest Published", props):
+                    sent += 1
+            results["klaviyo_sent"] = sent
+            print(
+                f"[digest] Klaviyo: triggered {sent}/{len(profile_ids)} subscribers",
+                flush=True,
+            )
+    except Exception as e:
+        print(f"[digest] ERROR: Klaviyo notification failed: {e}", flush=True)
+        results["klaviyo_error"] = str(e)
 
     elapsed = round(time.time() - start, 1)
     results["elapsed_seconds"] = elapsed

@@ -199,3 +199,53 @@ async def get_profile_by_email(email: str) -> str | None:
         if data:
             return data[0]["id"]
     return None
+
+
+def get_list_profile_ids_sync() -> list[str]:
+    """Fetch all profile IDs in the configured list (sync, paginated)."""
+    if not _enabled():
+        return []
+
+    ids: list[str] = []
+    url = f"{BASE}/lists/{settings.klaviyo_list_id}/profiles/"
+    with httpx.Client(timeout=30) as client:
+        while url:
+            resp = client.get(url, headers=_headers())
+            if resp.status_code != 200:
+                log.warning("klaviyo: list profiles failed %s", resp.status_code)
+                break
+            body = resp.json()
+            ids.extend(p["id"] for p in body.get("data", []))
+            url = body.get("links", {}).get("next")
+    log.info("klaviyo: fetched %d profiles from list", len(ids))
+    return ids
+
+
+def track_event_sync(
+    profile_id: str,
+    event_name: str,
+    properties: dict | None = None,
+) -> bool:
+    """Sync version of track_event for use in CLI scripts."""
+    if not _enabled() or not profile_id:
+        return False
+
+    payload = {
+        "data": {
+            "type": "event",
+            "attributes": {
+                "metric": {"data": {"type": "metric", "attributes": {"name": event_name}}},
+                "profile": {"data": {"type": "profile", "id": profile_id}},
+                "properties": properties or {},
+            },
+        },
+    }
+
+    with httpx.Client(timeout=15) as client:
+        resp = client.post(f"{BASE}/events/", json=payload, headers=_headers())
+
+    if resp.status_code in (200, 202):
+        return True
+
+    log.warning("klaviyo: event failed %s — %s", resp.status_code, resp.text)
+    return False
