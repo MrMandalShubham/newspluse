@@ -44,9 +44,9 @@ Response:
   "total_brands": 4986,
   "total_markets": 16,
   "monthly_history": [
-    { "month": "2025-10", "count": 2 },
-    { "month": "2025-11", "count": 13 },
-    { "month": "2026-10", "count": 1344 }
+    { "month": "2025-10", "count": 2, "positive_pct": 0 },
+    { "month": "2025-11", "count": 13, "positive_pct": 62 },
+    { "month": "2026-10", "count": 1344, "positive_pct": 71 }
   ],
   "market_coverage": [
     { "code": "KR", "name": "South Korea", "article_count": 1119, "percentage": 32.7 },
@@ -66,7 +66,12 @@ Response:
 }
 ```
 
-**Use for:** Articles Tracked widget, Monthly History chart, Market Coverage chart, Signal Tier breakdown.
+**Fields in `monthly_history`:**
+- `month` — YYYY-MM
+- `count` — total articles that month
+- `positive_pct` — int 0–100, % of articles with positive sentiment (0 when no sentiment data)
+
+**Use for:** Articles Tracked widget, Monthly History chart, Positive Coverage % chart, Market Coverage chart, Signal Tier breakdown.
 
 ---
 
