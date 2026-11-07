@@ -366,6 +366,7 @@ class MarketCoverage(BaseModel):
 class MonthlyCount(BaseModel):
     month: str
     count: int
+    positive_pct: int
 
 
 class StatsOut(BaseModel):
@@ -401,13 +402,20 @@ def get_stats(
 
     monthly_rows = session.execute(text(
         "SELECT to_char(date_trunc('month', published_at), 'YYYY-MM') as month, "
-        "count(*) as cnt "
+        "count(*) as cnt, "
+        "CASE WHEN count(*) FILTER (WHERE sentiment IS NOT NULL) > 0 "
+        "THEN round(100.0 * count(*) FILTER (WHERE sentiment = 'positive') "
+        "/ count(*) FILTER (WHERE sentiment IS NOT NULL))::int "
+        "ELSE 0 END as positive_pct "
         "FROM news_pulse_articles "
         "WHERE published_at >= now() - interval '12 months' "
         "GROUP BY date_trunc('month', published_at) "
         "ORDER BY date_trunc('month', published_at)"
     )).fetchall()
-    monthly_history = [MonthlyCount(month=r.month, count=r.cnt) for r in monthly_rows]
+    monthly_history = [
+        MonthlyCount(month=r.month, count=r.cnt, positive_pct=r.positive_pct)
+        for r in monthly_rows
+    ]
 
     market_rows = session.execute(text(
         "SELECT m.code, m.name, count(a.id) as cnt, "
